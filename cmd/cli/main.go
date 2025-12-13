@@ -66,6 +66,7 @@ func startNode() {
 	nodes := fs.String("nodes", "", "Comma-separated list of node addresses (including this node) for election/failover")
 	heartbeat := fs.String("heartbeat", "5s", "Heartbeat interval (e.g. 5s)")
 	coord := fs.String("coord-timeout", "10s", "2PC coordinator timeout (e.g. 10s)")
+	dsn := fs.String("dsn", "", "Postgres DSN (fallback to POSTGRES_DSN env var if empty)")
 	fs.Parse(os.Args[2:])
 
 	args := []string{"run", "./cmd/node", fmt.Sprintf("--addr=%s", *addr)}
@@ -73,6 +74,9 @@ func startNode() {
 		args = append(args, fmt.Sprintf("--nodes=%s", *nodes))
 	}
 	args = append(args, fmt.Sprintf("--heartbeat=%s", *heartbeat), fmt.Sprintf("--coord-timeout=%s", *coord))
+	if *dsn != "" {
+		args = append(args, fmt.Sprintf("--dsn=%s", *dsn))
+	}
 
 	fmt.Printf("Starting node %s...\n", *addr)
 	cmd := exec.Command("go", args...)
@@ -89,6 +93,7 @@ func startMaster() {
 	nodes := fs.String("nodes", "", "Comma-separated list of node addresses")
 	heartbeat := fs.String("heartbeat", "5s", "Heartbeat interval (e.g. 5s)")
 	coord := fs.String("coord-timeout", "10s", "2PC coordinator timeout (e.g. 10s)")
+	dsn := fs.String("dsn", "", "Postgres DSN (fallback to POSTGRES_DSN env var if empty)")
 	fs.Parse(os.Args[2:])
 
 	if *nodes == "" {
@@ -96,8 +101,20 @@ func startMaster() {
 		os.Exit(1)
 	}
 
-	args := []string{"run", "./cmd/master", fmt.Sprintf("--addr=%s", *addr), fmt.Sprintf("--nodes=%s", *nodes), fmt.Sprintf("--heartbeat=%s", *heartbeat), fmt.Sprintf("--coord-timeout=%s", *coord)}
+	args := []string{
+		"run",
+		"./cmd/master",
+		fmt.Sprintf("--addr=%s", *addr),
+		fmt.Sprintf("--nodes=%s", *nodes),
+		fmt.Sprintf("--heartbeat=%s", *heartbeat),
+		fmt.Sprintf("--coord-timeout=%s", *coord),
+	}
+	if *dsn != "" {
+		args = append(args, fmt.Sprintf("--dsn=%s", *dsn))
+	}
+
 	fmt.Printf("Starting master on %s...\n", *addr)
+	
 	cmd := exec.Command("go", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

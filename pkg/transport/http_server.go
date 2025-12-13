@@ -11,10 +11,13 @@ import (
 
 // HTTPServer handles incoming HTTP requests for a node
 type HTTPServer struct {
-	node          *node.Node
-	mux           *http.ServeMux
-	server        *http.Server
-	onTransaction func(payload any) (*protocol.TransactionResponse, error) // callback for master
+	node           *node.Node
+	mux            *http.ServeMux
+	server         *http.Server
+	onTransaction  func(payload any) (*protocol.TransactionResponse, error) // callback for master
+	onJoin         func(addr string) (*protocol.JoinResponse, error)        // callback for join requests
+	onAddNode      func(addr string) error                                  // callback to add node to cluster
+	getClusterInfo func() *protocol.ClusterInfoResponse                     // callback to get cluster info
 }
 
 // NewHTTPServer creates a new HTTP server for a node
@@ -32,6 +35,21 @@ func (s *HTTPServer) SetTransactionHandler(handler func(payload any) (*protocol.
 	s.onTransaction = handler
 }
 
+// SetJoinHandler sets the callback for handling join requests
+func (s *HTTPServer) SetJoinHandler(handler func(addr string) (*protocol.JoinResponse, error)) {
+	s.onJoin = handler
+}
+
+// SetAddNodeHandler sets the callback for adding nodes to the cluster
+func (s *HTTPServer) SetAddNodeHandler(handler func(addr string) error) {
+	s.onAddNode = handler
+}
+
+// SetClusterInfoHandler sets the callback for getting cluster info
+func (s *HTTPServer) SetClusterInfoHandler(handler func() *protocol.ClusterInfoResponse) {
+	s.getClusterInfo = handler
+}
+
 func (s *HTTPServer) setupRoutes() {
 	s.mux.HandleFunc("/health", s.handleHealth)
 	s.mux.HandleFunc("/role", s.handleRole)
@@ -39,6 +57,9 @@ func (s *HTTPServer) setupRoutes() {
 	s.mux.HandleFunc("/commit", s.handleCommit)
 	s.mux.HandleFunc("/abort", s.handleAbort)
 	s.mux.HandleFunc("/transaction", s.handleTransaction)
+	s.mux.HandleFunc("/cluster/join", s.handleJoin)
+	s.mux.HandleFunc("/cluster/nodes", s.handleClusterNodes)
+	s.mux.HandleFunc("/cluster/add", s.handleAddNode)
 }
 
 // Start starts the HTTP server
@@ -260,4 +281,126 @@ func (s *HTTPServer) handleTransaction(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}
 	json.NewEncoder(w).Encode(result)
+}
+
+// handleJoin handles requests from new nodes wanting to join the cluster
+func (s *HTTPServer) handleJoin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req protocol.JoinRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		resp := protocol.JoinResponse{
+			Success: false,
+			Error:   "Invalid request body",
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(resp)
+		return
+	}
+
+	if s.onJoin == nil {
+		resp := protocol.JoinResponse{
+			Success: false,
+			Error:   "Join handler not configured",
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(resp)
+		return
+	}
+
+	log.Printf("[Node %s] Received join request from %s", s.node.Addr, req.Address)
+
+	result, err := s.onJoin(req.Address)
+	if err != nil {
+		resp := protocol.JoinResponse{
+			Success: false,
+			Error:   err.Error(),
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(resp)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if result.Success {
+		w.WriteHeader(http.StatusOK)
+	} else {
+		w.WriteHeader(http.StatusBadRequest)
+	}
+	json.NewEncoder(w).Encode(result)
+}
+
+// handleClusterNodes returns the current cluster membership
+func (s *HTTPServer) handleClusterNodes(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if s.getClusterInfo == nil {
+		http.Error(w, "Cluster info handler not configured", http.StatusInternalServerError)
+		return
+	}
+
+	info := s.getClusterInfo()
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(info)
+}
+
+// handleAddNode handles requests to add a new node to the cluster
+func (s *HTTPServer) handleAddNode(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req protocol.AddNodeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		resp := protocol.AddNodeResponse{
+			Success: false,
+			Error:   "Invalid request body",
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(resp)
+		return
+	}
+
+	if s.onAddNode == nil {
+		resp := protocol.AddNodeResponse{
+			Success: false,
+			Error:   "Add node handler not configured",
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(resp)
+		return
+	}
+
+	log.Printf("[Node %s] Adding new node: %s", s.node.Addr, req.Address)
+
+	if err := s.onAddNode(req.Address); err != nil {
+		resp := protocol.AddNodeResponse{
+			Success: false,
+			Error:   err.Error(),
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(resp)
+		return
+	}
+
+	resp := protocol.AddNodeResponse{
+		Success: true,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(resp)
 }

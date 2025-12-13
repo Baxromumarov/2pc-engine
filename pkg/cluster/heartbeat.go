@@ -114,11 +114,13 @@ func (h *HeartbeatManager) CheckNode(addr string) bool {
 	if node == nil {
 		return false
 	}
+
 	return node.GetAlive()
 }
 
 // IsNodeAlive checks if a specific node is alive
 func (h *HeartbeatManager) IsNodeAlive(addr string) bool {
 	_, err := h.client.HealthCheck(addr)
+
 	return err == nil
 }

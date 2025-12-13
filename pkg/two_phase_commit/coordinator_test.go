@@ -35,8 +35,8 @@ func TestSuccessful2PC(t *testing.T) {
 	c.AddNode(slave1)
 	c.AddNode(slave2)
 
-	// Create coordinator and execute
-	coordinator := NewCoordinator(c, 5*time.Second)
+	// Create coordinator and execute (nil localNode = master doesn't participate)
+	coordinator := NewCoordinator(c, nil, 5*time.Second)
 	resp, err := coordinator.Execute(map[string]string{"test": "data"})
 
 	if err != nil {
@@ -73,7 +73,7 @@ func TestPrepareFails(t *testing.T) {
 	c.AddNode(slave1)
 	c.AddNode(slave2)
 
-	coordinator := NewCoordinator(c, 5*time.Second)
+	coordinator := NewCoordinator(c, nil, 5*time.Second)
 	resp, err := coordinator.Execute(map[string]string{"test": "data"})
 
 	if err != nil {
@@ -93,7 +93,7 @@ func TestNoParticipants(t *testing.T) {
 	c.AddNode(master)
 	c.SetMaster(master)
 
-	coordinator := NewCoordinator(c, 5*time.Second)
+	coordinator := NewCoordinator(c, nil, 5*time.Second)
 	resp, err := coordinator.Execute(map[string]string{"test": "data"})
 
 	if err != nil {

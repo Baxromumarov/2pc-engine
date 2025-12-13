@@ -46,6 +46,7 @@ func (c *Cluster) RemoveNode(addr string) {
 func (c *Cluster) GetNode(addr string) *node.Node {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
+
 	return c.nodes[addr]
 }
 
@@ -58,6 +59,7 @@ func (c *Cluster) GetNodes() []*node.Node {
 	for _, n := range c.nodes {
 		nodes = append(nodes, n)
 	}
+
 	return nodes
 }
 
@@ -93,6 +95,7 @@ func (c *Cluster) GetSlaveNodes() []*node.Node {
 func (c *Cluster) GetMaster() *node.Node {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
+
 	return c.master
 }
 
@@ -121,7 +124,9 @@ func (c *Cluster) GetNodeAddresses() []string {
 	for addr := range c.nodes {
 		addrs = append(addrs, addr)
 	}
+
 	sort.Strings(addrs)
+	
 	return addrs
 }
 
@@ -129,6 +134,7 @@ func (c *Cluster) GetNodeAddresses() []string {
 func (c *Cluster) Size() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
+
 	return len(c.nodes)
 }
 
@@ -140,5 +146,6 @@ func (c *Cluster) IsMasterAlive() bool {
 	if c.master == nil {
 		return false
 	}
+	
 	return c.master.GetAlive()
 }

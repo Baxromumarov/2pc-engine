@@ -59,3 +59,40 @@ type TransactionResponse struct {
 	Message       string `json:"message,omitempty"`
 	Error         string `json:"error,omitempty"`
 }
+
+// JoinRequest is sent by a new node to join the cluster
+type JoinRequest struct {
+	Address string `json:"address"` // The address of the node wanting to join
+}
+
+// JoinResponse is returned when a node joins the cluster
+type JoinResponse struct {
+	Success      bool     `json:"success"`
+	MasterAddr   string   `json:"master_addr,omitempty"`   // Current master address
+	ClusterNodes []string `json:"cluster_nodes,omitempty"` // All nodes in the cluster
+	Error        string   `json:"error,omitempty"`
+}
+
+// ClusterInfoResponse returns information about the cluster
+type ClusterInfoResponse struct {
+	MasterAddr string     `json:"master_addr"`
+	Nodes      []NodeInfo `json:"nodes"`
+}
+
+// NodeInfo contains information about a single node
+type NodeInfo struct {
+	Address string `json:"address"`
+	Role    string `json:"role"`
+	Alive   bool   `json:"alive"`
+}
+
+// AddNodeRequest is sent to add a new node to the cluster
+type AddNodeRequest struct {
+	Address string `json:"address"`
+}
+
+// AddNodeResponse is returned after adding a node
+type AddNodeResponse struct {
+	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
+}

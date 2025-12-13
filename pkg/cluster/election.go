@@ -12,6 +12,7 @@ import (
 func (c *Cluster) ElectMaster() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
 	c.electMasterLocked()
 }
 
@@ -35,10 +36,12 @@ func (c *Cluster) CheckAndElect() bool {
 
 	lowestAlive := c.lowestAliveAddrLocked()
 	currentMaster := ""
+
 	if c.master != nil {
 		currentMaster = c.master.Addr
 		if !c.master.GetAlive() {
 			log.Printf("[Election] Master %s is dead, triggering election", c.master.Addr)
+
 			c.master.SetRole(protocol.RoleSlave)
 			c.master = nil
 			currentMaster = ""
@@ -51,6 +54,7 @@ func (c *Cluster) CheckAndElect() bool {
 			c.master.SetRole(protocol.RoleSlave)
 			c.master = nil
 		}
+
 		return false
 	}
 
@@ -81,6 +85,7 @@ func (c *Cluster) ShouldBeMaster(addr string) bool {
 	}
 
 	sort.Strings(aliveAddrs)
+
 	return aliveAddrs[0] == addr
 }
 
@@ -99,6 +104,7 @@ func (c *Cluster) lowestAliveAddrLocked() string {
 	}
 
 	sort.Strings(aliveAddrs)
+
 	return aliveAddrs[0]
 }
 
@@ -122,5 +128,6 @@ func (c *Cluster) electMasterLocked() bool {
 	c.master = newMaster
 
 	log.Printf("[Election] Elected new master: %s", lowestAlive)
+
 	return true
 }

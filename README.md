@@ -4,9 +4,11 @@ A networked distributed transaction system in Go that uses HTTP-based communicat
 
 ## Features
 
-- **Two-Phase Commit (2PC)**: Distributed transaction coordination
+- **Two-Phase Commit (2PC)**: Distributed transaction coordination with atomic commits
+- **Master Participation**: Master node also participates in transactions (not just coordination)
 - **Master Election**: Deterministic election based on lexicographical address ordering
 - **Health Monitoring**: Heartbeat-based node health checks
+- **Dynamic Node Management**: Add/remove nodes at runtime via API
 - **HTTP Communication**: RESTful API for node communication
 - **CLI Tool**: Command-line interface for cluster management
 
@@ -32,19 +34,22 @@ Use the CLI helpers so the correct flags are passed.
 
 ```bash
 # terminal 1 (master candidate + coordinator)
+POSTGRES_DSN="postgres://user:pass@localhost:5432/2pc?sslmode=disable" \
 go run ./cmd/cli start-master --addr=localhost:8080 --nodes=localhost:8080,localhost:8081,localhost:8082
 
 # terminal 2 (peer)
+POSTGRES_DSN="postgres://user:pass@localhost:5432/2pc?sslmode=disable" \
 go run ./cmd/cli start-node --addr=localhost:8081 --nodes=localhost:8080,localhost:8081,localhost:8082
 
 # terminal 3 (peer)
+POSTGRES_DSN="postgres://user:pass@localhost:5432/2pc?sslmode=disable" \
 go run ./cmd/cli start-node --addr=localhost:8082 --nodes=localhost:8080,localhost:8081,localhost:8082
 ```
 
 Then issue a transaction:
 
 ```bash
-go run ./cmd/cli commit --master=localhost:8080 --payload='{"key": "value"}'
+go run ./cmd/cli commit --master=localhost:8080 --payload='{"table":"users","operation":"insert","values":{"id":1,"name":"Alice","email":"a@example.com"}}'
 ```
 
 ## CLI Commands
@@ -66,8 +71,32 @@ go run ./cmd/cli status --nodes=localhost:8080,localhost:8081,localhost:8082
 
 ### Execute a Transaction
 ```bash
-go run ./cmd/cli commit --master=localhost:8080 --payload='{"data": "example"}'
+go run ./cmd/cli commit --master=localhost:8080 --payload='{"table":"users","operation":"update","values":{"name":"Alice"},"where":{"id":1}}'
 ```
+
+## Dynamic Payload (Postgres)
+
+Payloads are executed as parameterized SQL against Postgres during the prepare phase (inside an open DB transaction), then committed/aborted atomically across nodes.
+
+Supported shape:
+```json
+{
+  "table": "users",                  // required
+  "operation": "insert" | "update",  // default insert (case-insensitive)
+  "values": { "col": "val", ... },   // required
+  "where":  { "col": "val", ... }    // required for update
+}
+```
+
+Examples:
+- Insert (operation defaults to insert):
+  `{"table":"users","values":{"id":1,"name":"Alice","email":"a@example.com"}}`
+- Update:
+  `{"table":"users","operation":"update","values":{"name":"Alice"},"where":{"id":1}}`
+
+Safety notes:
+- Identifiers are strictly validated (alphanumeric, `_`, `-`); queries are parameterized.
+- A metadata row is also recorded in `distributed_tx` with payload/status for auditing.
 
 ## HTTP API
 
@@ -114,12 +143,80 @@ Body: {"payload": {...}}
 → 200 {"transaction_id": "...", "success": true, "message": "..."}
 ```
 
+### Cluster Management
+
+#### Get Cluster Nodes
+```
+GET /cluster/nodes
+→ 200 {"master_addr": "...", "nodes": [{"address": "...", "role": "MASTER|SLAVE", "alive": true}]}
+```
+
+#### Join Cluster (New Node Registration)
+```
+POST /cluster/join
+Body: {"address": "new-node:8080"}
+→ 200 {"success": true, "master_addr": "...", "cluster_nodes": ["..."]}
+```
+
+#### Add Node to Cluster
+```
+POST /cluster/add
+Body: {"address": "new-node:8080"}
+→ 200 {"success": true}
+```
+
+## Dynamic Node Management
+
+### Adding a New Node in Production
+
+**Step 1:** Provision a new database for the node
+```sql
+CREATE DATABASE shard3;
+CREATE TABLE users (id SERIAL PRIMARY KEY, name VARCHAR(255), balance DECIMAL(10,2));
+```
+
+**Step 2:** Start the new node with its database connection
+```bash
+POSTGRES_DSN="postgres://user:pass@db:5432/shard3?sslmode=disable" \
+  ./node --addr=new-node:8080 --nodes=master:8080
+```
+
+**Step 3:** Register the node with the cluster
+```bash
+curl -X POST http://master:8080/cluster/join \
+  -H "Content-Type: application/json" \
+  -d '{"address":"new-node:8080"}'
+```
+
+**Step 4:** Verify the node was added
+```bash
+curl http://master:8080/cluster/nodes
+```
+
+### Architecture with Multiple Shards
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                       2PC Cluster                           │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  Master (localhost:8080)  ──────► master_db                 │
+│       │                                                     │
+│       ├── Slave1 (localhost:8081) ──► shard1                │
+│       ├── Slave2 (localhost:8082) ──► shard2                │
+│       └── Slave3 (localhost:8083) ──► shard3 (dynamically   │
+│                                              added)         │
+└─────────────────────────────────────────────────────────────┘
+```
+
 ## 2PC Protocol Flow
 
-1. **Prepare Phase**: Master sends `/prepare` to all alive slave nodes
-2. **Vote Collection**: If all nodes return `READY`, proceed to commit
-3. **Commit Phase**: Master sends `/commit` to all prepared nodes
-4. **Abort Handling**: If any node returns `ABORT` or times out, master sends `/abort` to all prepared nodes
+1. **Prepare Phase**: Master sends `/prepare` to all alive slave nodes AND prepares locally
+2. **Vote Collection**: If all nodes (including master) return `READY`, proceed to commit
+3. **Commit Phase**: Master commits locally AND sends `/commit` to all prepared nodes
+4. **Abort Handling**: If any node returns `ABORT` or times out, master aborts locally AND sends `/abort` to all prepared nodes
+
+**Note**: The master node participates in the transaction alongside slave nodes, ensuring data is written to all databases atomically.
 
 ## Master Election
 
@@ -140,12 +237,14 @@ The system uses a deterministic election algorithm:
 - `--nodes`: Comma-separated list of all node addresses (include self so election can converge)
 - `--heartbeat`: Heartbeat interval (default: `5s`)
 - `--coord-timeout`: 2PC coordinator timeout (default: `10s`)
+- `--dsn`: Postgres DSN (optional if `POSTGRES_DSN` env var is set)
 
 ### Node Options
 - `--addr`: Address to bind (default: `localhost:8081`)
 - `--nodes`: Comma-separated list of all node addresses (include master and peers)
 - `--heartbeat`: Heartbeat interval (default: `5s`)
 - `--coord-timeout`: 2PC coordinator timeout used if this node is elected master (default: `10s`)
+- `--dsn`: Postgres DSN (optional if `POSTGRES_DSN` env var is set)
 
 ## Running Tests
 
@@ -153,17 +252,59 @@ The system uses a deterministic election algorithm:
 go test ./... -v
 ```
 
+## Docker Deployment
+
+### Using Docker Compose
+
+```bash
+# Start the cluster (master + 2 nodes)
+docker-compose -f docker-compose.prod.yml up -d
+
+# Add a third node dynamically
+docker-compose -f docker-compose.prod.yml --profile scale up -d node3
+curl -X POST http://localhost:8080/cluster/join -d '{"address":"node3:8080"}'
+
+# Check cluster status
+curl http://localhost:8080/cluster/nodes
+
+# Execute a transaction
+curl -X POST http://localhost:8080/transaction \
+  -H "Content-Type: application/json" \
+  -d '{"payload":{"table":"users","operation":"update","values":{"balance":100},"where":{"id":1}}}'
+```
+
+### Building Docker Image
+
+```bash
+docker build -t 2pc-engine .
+```
+
 ## Architecture
 
 ```
 ┌─────────────┐     HTTP      ┌─────────────┐
 │   Master    │◄─────────────►│   Node 1    │
-│ (Coordinator)│              │ (Participant)│
-└──────┬──────┘               └─────────────┘
+│ (Coordinator│               │ (Participant)│
+│  + Participant)             │              │
+└──────┬──────┘               └──────┬───────┘
+       │                             │
+       │ HTTP                        │ Postgres
+       │                             ▼
+       │                      ┌─────────────┐
+       │                      │   Shard 1   │
+       │                      │  Database   │
+       │                      └─────────────┘
        │
-       │ HTTP                 ┌─────────────┐
+       │                      ┌─────────────┐
        └─────────────────────►│   Node 2    │
                               │ (Participant)│
+                              └──────┬───────┘
+                                     │
+                                     │ Postgres
+                                     ▼
+                              ┌─────────────┐
+                              │   Shard 2   │
+                              │  Database   │
                               └─────────────┘
 ```
 
