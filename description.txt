@@ -1,0 +1,241 @@
+🚀 Build a Distributed Two-Phase Commit (2PC) System in Go
+
+Create a networked distributed transaction system in Go that uses HTTP-based communication between nodes, plus a small CLI tool to start nodes and initiate 2PC transactions.
+
+🧱 Project Overview
+
+Implement a distributed system where:
+
+There are multiple nodes (database replicas)
+
+Exactly one node acts as master at any time
+
+Other nodes act as slaves
+
+Nodes communicate via HTTP
+
+Master performs Two-Phase Commit (2PC) to coordinate distributed transactions
+
+System supports master failover using a simple election algorithm
+
+Nodes send heartbeats and perform health checks
+
+A CLI tool allows starting nodes, starting a master, and sending commit requests
+
+This project should simulate a distributed SQL commit protocol using Go’s database/sql transaction interface, but you may mock DB operations for simplicity.
+
+📁 Required Directory Structure
+/cmd
+    /master
+        main.go
+    /node
+        main.go
+    /cli
+        main.go
+
+/pkg
+    /cluster
+        cluster.go
+        election.go
+        heartbeat.go
+    /node
+        node.go
+    /transport
+        http_server.go
+        http_client.go
+    /protocol
+        states.go
+        messages.go
+    /two_phase_commit
+        coordinator.go
+        participant.go
+
+📡 HTTP API Requirements
+
+Each node must expose these endpoints:
+
+1. Health check
+GET /health
+→ 200 OK if alive
+
+2. Prepare
+POST /prepare
+Body: {"transaction_id": "...", "payload": {...}}
+→ 200 { "status": "READY" }
+→ 500 { "status": "ABORT" }
+
+3. Commit
+POST /commit
+Body: {"transaction_id": "..."}
+→ 200 OK
+
+4. Abort
+POST /abort
+Body: {"transaction_id": "..."}
+→ 200 OK
+
+
+Each node must:
+
+Begin a local SQL transaction in Prepare
+
+Store the uncommitted transaction in memory
+
+If master sends Commit → node commits
+
+If Abort → node rolls back
+
+🔁 2PC Flow Requirements (Master side)
+
+Master must:
+
+Receive a CLI request to start a distributed transaction
+
+Send /prepare to all alive nodes
+
+If all return READY → send /commit
+
+If any return ABORT or timeout → send /abort to all
+
+Return success or failure to the CLI
+
+Timeouts must be handled.
+Master must not hang indefinitely.
+
+🔧 Node Behavior Requirements
+
+Each Node struct must contain:
+
+type Node struct {
+    Addr       string
+    Role       string // MASTER or SLAVE
+    IsAlive    bool
+    pendingTx  *sql.Tx
+    mu         sync.Mutex
+}
+
+
+Nodes must:
+
+Expose HTTP server
+
+Handle prepare/commit/abort
+
+Update IsAlive on health check
+
+Be able to become master after failover
+
+🫅 Master Election Requirements
+
+Implement a simple deterministic election algorithm:
+
+The alive node with the lowest lexicographical address becomes master
+
+All others become slaves
+
+If master dies, evict it and elect a new master automatically
+
+Election should occur:
+
+At startup
+
+When heartbeat detects master failure
+
+When nodes join or leave
+
+❤️ Heartbeat + HealthCheck Requirements
+
+Master (or temporary leader) must periodically:
+
+Ping /health of every node
+
+Update node.IsAlive
+
+If master is dead → elect a new master
+
+If a node is dead → exclude from 2PC
+
+Use time.Ticker for periodic checks.
+
+🛠 CLI Requirements
+
+Create a CLI tool with commands:
+
+1. Start a node
+./cli start-node --addr=localhost:8081
+
+2. Start the master
+./cli start-master --nodes=localhost:8081,localhost:8082
+
+3. Start a distributed transaction
+./cli commit --payload="{...}"
+
+
+The CLI must:
+
+Detect current master via /role endpoint
+
+Send 2PC request to the master
+
+Print result to the user
+
+📦 Protocol + Messages
+
+Create types for JSON messages:
+
+type PrepareRequest struct {
+    TransactionID string      `json:"transaction_id"`
+    Payload       any `json:"payload"`
+}
+
+type PrepareResponse struct {
+    Status string `json:"status"` // READY or ABORT
+}
+
+States constants:
+StateInit
+StatePrepare
+StateReady
+StateCommit
+StateAbort
+
+🎯 Features to Implement
+Required
+
+HTTP servers for nodes
+
+HTTP client for inter-node communication
+
+2PC coordinator (master)
+
+Participants (nodes)
+
+Local SQL transaction simulation
+
+Heartbeat system
+
+Deterministic master election
+
+CLI tool
+
+Optional (nice to have)
+
+Docker Compose to simulate multiple nodes
+
+Logging system
+
+Retry logic
+
+WAL (write-ahead log) for crash recovery
+
+🧪 Testing Requirements
+
+Implement tests for:
+
+successful 2PC
+
+one node failing prepare → full abort
+
+master failure → new master elected
+
+health check functionality
