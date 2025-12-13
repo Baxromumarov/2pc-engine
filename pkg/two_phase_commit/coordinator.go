@@ -90,16 +90,20 @@ func (c *Coordinator) Execute(payload any) (*protocol.TransactionResponse, error
 
 	outcome := c.prepareTransaction(txID, payload, includeLocal, remoteParticipants)
 	if len(outcome.failedNodes) > 0 {
-		c.abortTransaction(txID, outcome, participantAddrs)
+		abortErr := c.abortTransaction(txID, outcome, participantAddrs)
+		errMsg := fmt.Sprintf("Prepare failed for nodes: %v", outcome.failedNodes)
+		if abortErr != nil {
+			errMsg = fmt.Sprintf("%s; abort errors: %v", errMsg, abortErr)
+		}
 
 		return &protocol.TransactionResponse{
 			TransactionID: txID,
 			Success:       false,
-			Error:         fmt.Sprintf("Prepare failed for nodes: %v", outcome.failedNodes),
+			Error:         errMsg,
 		}, nil
 	}
 
-	commitSuccess, totalCommitted := c.commitTransaction(txID, outcome)
+	commitSuccess, totalCommitted, failedCommitNodes, commitErr := c.commitTransaction(txID, outcome)
 	if commitSuccess {
 		return &protocol.TransactionResponse{
 			TransactionID: txID,
@@ -108,10 +112,18 @@ func (c *Coordinator) Execute(payload any) (*protocol.TransactionResponse, error
 		}, nil
 	}
 
+	errMsg := "Some commits failed"
+	if len(failedCommitNodes) > 0 {
+		errMsg = fmt.Sprintf("Commit failed for nodes: %v", failedCommitNodes)
+	}
+	if commitErr != nil {
+		errMsg = fmt.Sprintf("%s; details: %v", errMsg, commitErr)
+	}
+
 	return &protocol.TransactionResponse{
 		TransactionID: txID,
 		Success:       false,
-		Error:         "Some commits failed",
+		Error:         errMsg,
 	}, nil
 }
 
@@ -152,15 +164,22 @@ func (c *Coordinator) prepareTransaction(
 	return outcome
 }
 
-func (c *Coordinator) commitTransaction(txID string, outcome prepareOutcome) (bool, int) {
+func (c *Coordinator) commitTransaction(txID string, outcome prepareOutcome) (bool, int, []string, error) {
 	log.Printf("[Coordinator] All participants ready, committing transaction %s", txID)
+
+	var failedNodes []string
+	var errs []error
+	totalCommitted := 0
 
 	localCommitSuccess := true
 	if outcome.includeLocal && outcome.localPrepared {
 		if err := c.localNode.Commit(txID); err != nil {
 			localCommitSuccess = false
+			failedNodes = append(failedNodes, c.localNode.Addr+" (local)")
+			errs = append(errs, fmt.Errorf("local commit: %w", err))
 			log.Printf("[Coordinator] Local node commit failed for %s: %v", txID, err)
 		} else {
+			totalCommitted++
 			log.Printf("[Coordinator] Local node committed transaction %s", txID)
 		}
 	}
@@ -171,28 +190,38 @@ func (c *Coordinator) commitTransaction(txID string, outcome prepareOutcome) (bo
 	for _, result := range commitResults {
 		if !result.Success {
 			commitSuccess = false
+			failedNodes = append(failedNodes, result.Addr)
+			if result.Error != nil {
+				errs = append(errs, fmt.Errorf("%s: %w", result.Addr, result.Error))
+			}
 			log.Printf("[Coordinator] Commit failed for %s: %v", result.Addr, result.Error)
+		} else {
+			totalCommitted++
 		}
 	}
 
-	totalCommitted := len(outcome.preparedRemotes)
-	if outcome.includeLocal && outcome.localPrepared {
-		totalCommitted++
-	}
-
-	return commitSuccess, totalCommitted
+	return commitSuccess, totalCommitted, failedNodes, errors.Join(errs...)
 }
 
-func (c *Coordinator) abortTransaction(txID string, outcome prepareOutcome, participantAddrs []string) {
+func (c *Coordinator) abortTransaction(txID string, outcome prepareOutcome, participantAddrs []string) error {
 	log.Printf("[Coordinator] Prepare failed for nodes %v, aborting transaction %s", outcome.failedNodes, txID)
+
+	var abortErrs []error
 
 	if outcome.includeLocal && outcome.localPrepared {
 		if err := c.localNode.Abort(txID); err != nil {
 			log.Printf("[Coordinator] Local node abort failed for %s: %v", txID, err)
+			abortErrs = append(abortErrs, fmt.Errorf("local abort: %w", err))
 		}
 	}
 
-	c.abortPhase(txID, participantAddrs)
+	for _, result := range c.abortPhase(txID, participantAddrs) {
+		if !result.Success && result.Error != nil {
+			abortErrs = append(abortErrs, fmt.Errorf("%s: %w", result.Addr, result.Error))
+		}
+	}
+
+	return errors.Join(abortErrs...)
 }
 
 // preparePhase sends prepare requests to all participants

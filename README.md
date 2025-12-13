@@ -11,6 +11,7 @@ A networked distributed transaction system in Go that uses HTTP-based communicat
 - **Dynamic Node Management**: Add/remove nodes at runtime via API
 - **HTTP Communication**: RESTful API for node communication
 - **CLI Tool**: Command-line interface for cluster management
+- **Resilience**: Optional HTTP retries/backoff for transport and heartbeats; clearer commit/abort error reporting
 
 ## Project Structure
 
@@ -73,6 +74,13 @@ go run ./cmd/cli status --nodes=localhost:8080,localhost:8081,localhost:8082
 ```bash
 go run ./cmd/cli commit --master=localhost:8080 --payload='{"table":"users","operation":"update","values":{"name":"Alice"},"where":{"id":1}}'
 ```
+
+## Reliability Notes
+
+- **Retries**: HTTP client and heartbeat use a small retry/backoff for transient 5xx/transport failures. Enable/adjust via `transport.NewHTTPClient(timeout).WithRetry(maxRetries, retryDelay)`.
+- **Error surfaces**: Coordinator aggregates commit/abort failures per node in responses/logs to aid debugging.
+- **Crash recovery**: 2PC is sensitive to coordinator crashes; add a durable WAL/persistent log before production use.
+- **Security**: Endpoints are unauthenticated in this demo. Add TLS and auth (API keys/mTLS) for real deployments.
 
 ## Dynamic Payload (Postgres)
 
@@ -225,10 +233,10 @@ The system uses a deterministic election algorithm:
 1. All alive nodes are sorted by address (lexicographically)
 2. The node with the lowest address becomes master
 3. Election triggers on:
-   - System startup
-   - Master failure detection
-   - Node join/leave events
-   - Any change in the lowest-alive node (role updates are propagated)
+ - System startup
+ - Master failure detection
+ - Node join/leave events
+ - Any change in the lowest-alive node (role updates are propagated)
 
 ## Configuration
 
@@ -238,6 +246,18 @@ The system uses a deterministic election algorithm:
 - `--heartbeat`: Heartbeat interval (default: `5s`)
 - `--coord-timeout`: 2PC coordinator timeout (default: `10s`)
 - `--dsn`: Postgres DSN (optional if `POSTGRES_DSN` env var is set)
+
+## Testing
+
+Run all tests:
+```bash
+go test ./...
+```
+
+See coverage (per improvement plan for coordinator flow):
+```bash
+go test -coverpkg=./... ./pkg/two_phase_commit
+```
 
 ### Node Options
 - `--addr`: Address to bind (default: `localhost:8081`)

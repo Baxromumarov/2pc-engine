@@ -1,0 +1,9 @@
+2025/12/13 19:02:58 Starting node on localhost:8082
+2025/12/13 19:02:58 [Heartbeat] Started with interval 5s
+2025/12/13 19:02:58 [Election] Elected new master: localhost:8080
+2025/12/13 19:02:58 Node ready on localhost:8082 (peers: localhost:8080,localhost:8081,localhost:8082)
+2025/12/13 19:02:58 [HTTPServer] Starting server on localhost:8082
+2025/12/13 19:03:19 [Node localhost:8082] Received prepare request for transaction c51fd833-e64e-4c9b-ad9d-48ed62603c6b
+2025/12/13 19:03:19 [Node localhost:8082] Prepared transaction c51fd833-e64e-4c9b-ad9d-48ed62603c6b
+2025/12/13 19:03:19 [Node localhost:8082] Received commit request for transaction c51fd833-e64e-4c9b-ad9d-48ed62603c6b
+2025/12/13 19:03:19 [Node localhost:8082] Committed transaction c51fd833-e64e-4c9b-ad9d-48ed62603c6b

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -163,5 +164,43 @@ func TestHTTPClientAbort(t *testing.T) {
 
 	if !resp.Success {
 		t.Error("Expected success")
+	}
+}
+
+func TestHTTPClientPrepareRetriesOnServerError(t *testing.T) {
+	var attempts int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&attempts, 1) == 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
+		resp := protocol.PrepareResponse{
+			Status: protocol.StatusReady,
+		}
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	client := NewHTTPClient(5*time.Second).WithRetry(1, 5*time.Millisecond)
+	addr := server.Listener.Addr().String()
+
+	req := &protocol.PrepareRequest{
+		TransactionID: "retry-tx-123",
+		Payload:       map[string]string{"key": "value"},
+	}
+
+	resp, err := client.Prepare(addr, req)
+	if err != nil {
+		t.Fatalf("Prepare with retry failed: %v", err)
+	}
+
+	if resp.Status != protocol.StatusReady {
+		t.Errorf("Expected READY after retry, got %s", resp.Status)
+	}
+
+	if attempts != 2 {
+		t.Fatalf("Expected 2 attempts (1 retry), got %d", attempts)
 	}
 }

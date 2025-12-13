@@ -1,0 +1,149 @@
+To improve test coverage in your 2PC-engine repository, here's one comprehensive test description focused on the Coordinator's full execution flow. This test would enhance coverage for coordinator.go by simulating a multi-node scenario with mixed success/failure outcomes, including local participation, timeouts, and error handling. It uses Go's testing package with mocks for nodes and DB interactions to isolate the coordinator logic, aiming to cover happy paths, partial aborts, and concurrency edge cases. Implementing this (or similar) could push your core logic coverage toward 90%+ when run with go test -coverpkg=./... ./pkg/two_phase_commit.
+Test Name: TestCoordinator_ExecuteFullFlowWithFailures
+
+Purpose: Verifies the Coordinator's Execute method handles a complete 2PC transaction across multiple participants (including local), with some failures triggering abort. Covers prepare, vote collection, commit/abort phases, mutex locking, goroutine parallelism, timeout handling, and error propagation. This tests ~80% of the phase functions in one go, including edge cases like one node timeout and one vote "no".
+Setup: Use mock nodes (e.g., via a struct implementing Node interface) to simulate remote participants. Mock the DB connection for the local node to control prepare/commit outcomes. Use httptest for HTTP client simulation if needed, but keep it simple with direct method calls for unit testing.
+Inputs:
+Payload: A sample SQLAction (e.g., INSERT into test_table).
+Participants: 3 mocks – one local (coordinator as participant), two remotes.
+Simulate: Remote1 votes "yes" quickly, Remote2 times out, Local prepares successfully but aborts if needed.
+
+Expected Outcomes:
+Prepare phase: Local succeeds, Remote1 succeeds, Remote2 fails (timeout) → overall abort.
+Abort phase: Called on all (including local), with rollback.
+No commit phase triggered.
+Error returned: Something like "aborted due to failures: timeout on node X".
+Concurrency: Ensure no races with sync.WaitGroup and mutex.
+
+Additional Coverage:
+Happy path variant: All yes → commit.
+Concurrent tx attempt: Second Execute during first → blocked by mu.Lock().
+Empty participants: Immediate local-only success.
+
+Implementation Notes:
+Use testing.T with subtests for variants (e.g., t.Run("AllSuccess", ...)).
+Measure coverage: After adding, run go test -coverprofile=cover.out ./pkg/two_phase_commit and go tool cover -html=cover.out to visualize uncovered lines.
+Integrate with existing tests: Add this to coordinator_test.go.
+
+
+Here's a sample code snippet for this test (adapt to your exact types/mocks; assume you've defined a MockNode struct with controllable Prepare/Commit/Abort methods):
+Gopackage two_phase_commit
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/Baxromumarov/2pc-engine/pkg/node" // Adjust imports as needed
+	"github.com/Baxromumarov/2pc-engine/pkg/protocol" // For TransactionResponse
+	// Add any other imports, e.g., for your SQLAction type
+)
+
+// MockNode simulates a participant node.
+type MockNode struct {
+	node.Node // Embed if needed, or implement interface
+	prepareErr error
+	commitErr  error
+	abortErr   error
+	prepareDelay time.Duration
+	// Add fields for controlling behavior
+}
+
+func (m *MockNode) Prepare(txID string, payload any) (bool, error) {
+	time.Sleep(m.prepareDelay)
+	return m.prepareErr == nil, m.prepareErr
+}
+
+func (m *MockNode) Commit(txID string) error {
+	return m.commitErr
+}
+
+func (m *MockNode) Abort(txID string) error {
+	return m.abortErr
+}
+
+// Add mocks for other methods if needed (e.g., Addr() string).
+
+func TestCoordinator_ExecuteFullFlowWithFailures(t *testing.T) {
+	tests := []struct {
+		name          string
+		localPrepareErr error
+		remotes       []*MockNode
+		wantErr       bool
+		wantOutcome   string // e.g., "committed" or "aborted"
+	}{
+		{
+			name: "PartialFailureTriggersAbort",
+			remotes: []*MockNode{
+				{prepareDelay: 10 * time.Millisecond}, // Succeeds quickly
+				{prepareDelay: 2 * time.Second},        // Times out (assuming coordinator timeout <2s)
+			},
+			wantErr:     true,
+			wantOutcome: "aborted",
+		},
+		{
+			name: "AllSuccessCommits",
+			remotes: []*MockNode{
+				{}, // Succeeds
+				{}, // Succeeds
+			},
+			wantErr:     false,
+			wantOutcome: "committed",
+		},
+		// Add more variants, e.g., local failure, no remotes.
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Mock local node (coordinator's own node).
+			localNode := &MockNode{prepareErr: tt.localPrepareErr}
+			coord := NewCoordinator(localNode, []string{"remote1:8080", "remote2:8080"}) // Adjust constructor.
+			coord.httpClient.Timeout = 500 * time.Millisecond // For timeout simulation; normally from config.
+
+			// Override participants with mocks for test.
+			var participants []*node.Node
+			for _, m := range tt.remotes {
+				participants = append(participants, &node.Node{ /* set Addr, etc. */ NodeImpl: m }) // Adapt to your Node struct.
+			}
+
+			payload := /* Your sample payload, e.g., SQLAction{Action: "INSERT", Table: "test", Values: map[string]any{"id": 1}} */
+			resp, err := coord.Execute(payload)
+
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Execute() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if resp != nil && resp.Status != tt.wantOutcome { // Assuming TransactionResponse has Status field.
+				t.Errorf("Execute() outcome = %v, want %v", resp.Status, tt.wantOutcome)
+			}
+
+			// Additional assertions: Check if abort/commit was called on mocks.
+			for _, m := range tt.remotes {
+				if tt.wantOutcome == "aborted" {
+					if m.abortErr == nil { // Assume called if no err set.
+						// Verify call counts if you add counters to MockNode.
+					}
+				}
+			}
+		})
+	}
+}
+
+// Bonus: Test concurrent access.
+func TestCoordinator_ConcurrentExecutes(t *testing.T) {
+	// Setup coord with mocks that succeed.
+	var wg sync.WaitGroup
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := coord.Execute(payload)
+			if err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	// Assert all succeeded without races (mutex ensures serial execution).
+}

@@ -1,0 +1,13 @@
+2025/12/13 19:02:58 Starting master on localhost:8080 with nodes: [localhost:8080 localhost:8081 localhost:8082]
+2025/12/13 19:02:58 [Heartbeat] Started with interval 5s
+2025/12/13 19:02:58 [Election] Elected new master: localhost:8080
+2025/12/13 19:02:58 Master candidate listening on localhost:8080
+2025/12/13 19:02:58 [HTTPServer] Starting server on localhost:8080
+2025/12/13 19:03:19 [Master localhost:8080] Received transaction request
+2025/12/13 19:03:19 [Coordinator] Starting 2PC for transaction c51fd833-e64e-4c9b-ad9d-48ed62603c6b
+2025/12/13 19:03:19 [Coordinator] Found 3 participants for transaction c51fd833-e64e-4c9b-ad9d-48ed62603c6b (including local: true)
+2025/12/13 19:03:19 [Node localhost:8080] Prepared transaction c51fd833-e64e-4c9b-ad9d-48ed62603c6b
+2025/12/13 19:03:19 [Coordinator] Local node prepared for transaction c51fd833-e64e-4c9b-ad9d-48ed62603c6b
+2025/12/13 19:03:19 [Coordinator] All participants ready, committing transaction c51fd833-e64e-4c9b-ad9d-48ed62603c6b
+2025/12/13 19:03:19 [Node localhost:8080] Committed transaction c51fd833-e64e-4c9b-ad9d-48ed62603c6b
+2025/12/13 19:03:19 [Coordinator] Local node committed transaction c51fd833-e64e-4c9b-ad9d-48ed62603c6b

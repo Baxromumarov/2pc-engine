@@ -21,7 +21,7 @@ type HeartbeatManager struct {
 func NewHeartbeatManager(cluster *Cluster, interval time.Duration) *HeartbeatManager {
 	return &HeartbeatManager{
 		cluster:  cluster,
-		client:   transport.NewHTTPClient(2 * time.Second),
+		client:   transport.NewHTTPClient(2*time.Second).WithRetry(1, 100*time.Millisecond),
 		interval: interval,
 		stopCh:   make(chan struct{}),
 	}
