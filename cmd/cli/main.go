@@ -114,7 +114,7 @@ func startMaster() {
 	}
 
 	fmt.Printf("Starting master on %s...\n", *addr)
-	
+
 	cmd := exec.Command("go", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

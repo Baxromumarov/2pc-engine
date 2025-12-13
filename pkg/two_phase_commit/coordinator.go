@@ -48,6 +48,13 @@ type CommitResult struct {
 	Error   error
 }
 
+type prepareOutcome struct {
+	includeLocal    bool
+	localPrepared   bool
+	preparedRemotes []string
+	failedNodes     []string
+}
+
 // Execute runs the 2PC protocol for a transaction
 func (c *Coordinator) Execute(payload any) (*protocol.TransactionResponse, error) {
 	c.mu.Lock()
@@ -76,124 +83,131 @@ func (c *Coordinator) Execute(payload any) (*protocol.TransactionResponse, error
 
 	log.Printf("[Coordinator] Found %d participants for transaction %s (including local: %v)", totalParticipants, txID, includeLocal)
 
-	// Phase 1: Prepare
-	// First, prepare the local node (master)
-	var localPrepared bool
-	if includeLocal {
-		ready, err := c.localNode.Prepare(txID, payload)
-		if ready && err == nil {
-			localPrepared = true
-			log.Printf("[Coordinator] Local node prepared for transaction %s", txID)
-		} else {
-			log.Printf("[Coordinator] Local node prepare failed for transaction %s: %v", txID, err)
-		}
-	}
-
-	// Then, prepare remote participants
-	prepareResults := c.preparePhase(txID, payload, remoteParticipants)
 	participantAddrs := make([]string, 0, len(remoteParticipants))
 	for _, p := range remoteParticipants {
 		participantAddrs = append(participantAddrs, p.Addr)
 	}
 
-	// Check if all participants are ready
-	allReady := (!includeLocal || localPrepared) // Local must be ready if included
-	var failedNodes []string
-	var preparedNodes []string
-
-	if includeLocal && !localPrepared {
-		allReady = false
-		failedNodes = append(failedNodes, c.localNode.Addr+" (local)")
-	}
-
-	for _, result := range prepareResults {
-		if result.Success && result.Response != nil && result.Response.Status == protocol.StatusReady {
-			preparedNodes = append(preparedNodes, result.Addr)
-		} else {
-			allReady = false
-			failedNodes = append(failedNodes, result.Addr)
-			if result.Error != nil {
-				log.Printf("[Coordinator] Prepare failed for %s: %v", result.Addr, result.Error)
-			}
-		}
-	}
-
-	// Phase 2: Commit or Abort
-	if allReady {
-		log.Printf("[Coordinator] All participants ready, committing transaction %s", txID)
-
-		// Commit local node first
-		var localCommitSuccess bool
-		if includeLocal && localPrepared {
-			if err := c.localNode.Commit(txID); err != nil {
-				log.Printf("[Coordinator] Local node commit failed for %s: %v", txID, err)
-				localCommitSuccess = false
-			} else {
-				localCommitSuccess = true
-				log.Printf("[Coordinator] Local node committed transaction %s", txID)
-			}
-		} else {
-			localCommitSuccess = true // Not included or not prepared
-		}
-
-		// Commit remote participants
-		commitResults := c.commitPhase(txID, preparedNodes)
-
-		// Check commit results
-		commitSuccess := localCommitSuccess
-		for _, result := range commitResults {
-			if !result.Success {
-				commitSuccess = false
-				log.Printf("[Coordinator] Commit failed for %s: %v", result.Addr, result.Error)
-			}
-		}
-
-		if commitSuccess {
-			totalCommitted := len(preparedNodes)
-			if includeLocal && localPrepared {
-				totalCommitted++
-			}
-			return &protocol.TransactionResponse{
-				TransactionID: txID,
-				Success:       true,
-				Message:       fmt.Sprintf("Transaction committed on %d nodes", totalCommitted),
-			}, nil
-		} else {
-			return &protocol.TransactionResponse{
-				TransactionID: txID,
-				Success:       false,
-				Error:         "Some commits failed",
-			}, nil
-		}
-	} else {
-		log.Printf("[Coordinator] Prepare failed for nodes %v, aborting transaction %s", failedNodes, txID)
-
-		// Abort local node if it was prepared
-		if includeLocal && localPrepared {
-			if err := c.localNode.Abort(txID); err != nil {
-				log.Printf("[Coordinator] Local node abort failed for %s: %v", txID, err)
-			}
-		}
-
-		// Abort remote participants
-		c.abortPhase(txID, participantAddrs)
+	outcome := c.prepareTransaction(txID, payload, includeLocal, remoteParticipants)
+	if len(outcome.failedNodes) > 0 {
+		c.abortTransaction(txID, outcome, participantAddrs)
 
 		return &protocol.TransactionResponse{
 			TransactionID: txID,
 			Success:       false,
-			Error:         fmt.Sprintf("Prepare failed for nodes: %v", failedNodes),
+			Error:         fmt.Sprintf("Prepare failed for nodes: %v", outcome.failedNodes),
 		}, nil
 	}
+
+	commitSuccess, totalCommitted := c.commitTransaction(txID, outcome)
+	if commitSuccess {
+		return &protocol.TransactionResponse{
+			TransactionID: txID,
+			Success:       true,
+			Message:       fmt.Sprintf("Transaction committed on %d nodes", totalCommitted),
+		}, nil
+	}
+
+	return &protocol.TransactionResponse{
+		TransactionID: txID,
+		Success:       false,
+		Error:         "Some commits failed",
+	}, nil
+}
+
+func (c *Coordinator) prepareTransaction(
+	txID string,
+	payload any,
+	includeLocal bool,
+	remoteParticipants []*node.Node,
+) prepareOutcome {
+	outcome := prepareOutcome{
+		includeLocal: includeLocal,
+	}
+
+	if includeLocal {
+		ready, err := c.localNode.Prepare(txID, payload)
+		if ready && err == nil {
+			outcome.localPrepared = true
+			log.Printf("[Coordinator] Local node prepared for transaction %s", txID)
+		} else {
+			outcome.failedNodes = append(outcome.failedNodes, c.localNode.Addr+" (local)")
+			log.Printf("[Coordinator] Local node prepare failed for transaction %s: %v", txID, err)
+		}
+	}
+
+	prepareResults := c.preparePhase(txID, payload, remoteParticipants)
+	for _, result := range prepareResults {
+		if result.Success {
+			outcome.preparedRemotes = append(outcome.preparedRemotes, result.Addr)
+			continue
+		}
+
+		outcome.failedNodes = append(outcome.failedNodes, result.Addr)
+		if result.Error != nil {
+			log.Printf("[Coordinator] Prepare failed for %s: %v", result.Addr, result.Error)
+		}
+	}
+
+	return outcome
+}
+
+func (c *Coordinator) commitTransaction(txID string, outcome prepareOutcome) (bool, int) {
+	log.Printf("[Coordinator] All participants ready, committing transaction %s", txID)
+
+	localCommitSuccess := true
+	if outcome.includeLocal && outcome.localPrepared {
+		if err := c.localNode.Commit(txID); err != nil {
+			localCommitSuccess = false
+			log.Printf("[Coordinator] Local node commit failed for %s: %v", txID, err)
+		} else {
+			log.Printf("[Coordinator] Local node committed transaction %s", txID)
+		}
+	}
+
+	commitResults := c.commitPhase(txID, outcome.preparedRemotes)
+
+	commitSuccess := localCommitSuccess
+	for _, result := range commitResults {
+		if !result.Success {
+			commitSuccess = false
+			log.Printf("[Coordinator] Commit failed for %s: %v", result.Addr, result.Error)
+		}
+	}
+
+	totalCommitted := len(outcome.preparedRemotes)
+	if outcome.includeLocal && outcome.localPrepared {
+		totalCommitted++
+	}
+
+	return commitSuccess, totalCommitted
+}
+
+func (c *Coordinator) abortTransaction(txID string, outcome prepareOutcome, participantAddrs []string) {
+	log.Printf("[Coordinator] Prepare failed for nodes %v, aborting transaction %s", outcome.failedNodes, txID)
+
+	if outcome.includeLocal && outcome.localPrepared {
+		if err := c.localNode.Abort(txID); err != nil {
+			log.Printf("[Coordinator] Local node abort failed for %s: %v", txID, err)
+		}
+	}
+
+	c.abortPhase(txID, participantAddrs)
 }
 
 // preparePhase sends prepare requests to all participants
-func (c *Coordinator) preparePhase(txID string, payload any, participants []*node.Node) []PrepareResult {
+func (c *Coordinator) preparePhase(
+	txID string,
+	payload any,
+	participants []*node.Node,
+) []PrepareResult {
 	results := make([]PrepareResult, len(participants))
 	var wg sync.WaitGroup
+
 	wg.Add(len(participants))
 
 	for i, p := range participants {
-		idx := i
+		idx := i // shadowing for goroutine
 		participant := p
 		go func() {
 			defer wg.Done()
@@ -214,6 +228,7 @@ func (c *Coordinator) preparePhase(txID string, payload any, participants []*nod
 	}
 
 	wg.Wait()
+
 	return results
 }
 
@@ -221,6 +236,7 @@ func (c *Coordinator) preparePhase(txID string, payload any, participants []*nod
 func (c *Coordinator) commitPhase(txID string, preparedAddrs []string) []CommitResult {
 	results := make([]CommitResult, len(preparedAddrs))
 	var wg sync.WaitGroup
+
 	wg.Add(len(preparedAddrs))
 
 	for i, addr := range preparedAddrs {
@@ -246,6 +262,7 @@ func (c *Coordinator) commitPhase(txID string, preparedAddrs []string) []CommitR
 	}
 
 	wg.Wait()
+
 	return results
 }
 

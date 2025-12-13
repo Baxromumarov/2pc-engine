@@ -37,7 +37,9 @@ func (p *Participant) Prepare(txID string, payload any) *protocol.PrepareRespons
 
 	// Check if transaction already exists
 	if _, exists := p.transactions[txID]; exists {
+		
 		log.Printf("[Participant %s] Transaction %s already exists", p.node.Addr, txID)
+		
 		return &protocol.PrepareResponse{
 			Status: protocol.StatusAbort,
 			Error:  "Transaction already in progress",
@@ -51,7 +53,9 @@ func (p *Participant) Prepare(txID string, payload any) *protocol.PrepareRespons
 		if err != nil {
 			errMsg = err.Error()
 		}
+
 		log.Printf("[Participant %s] Failed to prepare transaction %s: %s", p.node.Addr, txID, errMsg)
+		
 		return &protocol.PrepareResponse{
 			Status: protocol.StatusAbort,
 			Error:  errMsg,
@@ -66,6 +70,7 @@ func (p *Participant) Prepare(txID string, payload any) *protocol.PrepareRespons
 	}
 
 	log.Printf("[Participant %s] Prepared transaction %s", p.node.Addr, txID)
+	
 	return &protocol.PrepareResponse{
 		Status: protocol.StatusReady,
 	}
@@ -78,7 +83,9 @@ func (p *Participant) Commit(txID string) *protocol.CommitResponse {
 
 	txState, exists := p.transactions[txID]
 	if !exists {
+		
 		log.Printf("[Participant %s] Transaction %s not found for commit", p.node.Addr, txID)
+		
 		return &protocol.CommitResponse{
 			Success: false,
 			Error:   "Transaction not found",
@@ -86,7 +93,9 @@ func (p *Participant) Commit(txID string) *protocol.CommitResponse {
 	}
 
 	if txState.State != protocol.StateReady {
+	
 		log.Printf("[Participant %s] Transaction %s not in READY state", p.node.Addr, txID)
+	
 		return &protocol.CommitResponse{
 			Success: false,
 			Error:   "Transaction not in READY state",
@@ -95,7 +104,9 @@ func (p *Participant) Commit(txID string) *protocol.CommitResponse {
 
 	// Commit on the node
 	if err := p.node.Commit(txID); err != nil {
+		
 		log.Printf("[Participant %s] Failed to commit transaction %s: %v", p.node.Addr, txID, err)
+		
 		return &protocol.CommitResponse{
 			Success: false,
 			Error:   err.Error(),
@@ -107,6 +118,7 @@ func (p *Participant) Commit(txID string) *protocol.CommitResponse {
 	delete(p.transactions, txID)
 
 	log.Printf("[Participant %s] Committed transaction %s", p.node.Addr, txID)
+
 	return &protocol.CommitResponse{
 		Success: true,
 	}
@@ -121,6 +133,7 @@ func (p *Participant) Abort(txID string) *protocol.AbortResponse {
 	if !exists {
 		// Transaction might not exist if prepare failed
 		log.Printf("[Participant %s] Transaction %s not found for abort (may not have been prepared)", p.node.Addr, txID)
+		
 		return &protocol.AbortResponse{
 			Success: true,
 		}
@@ -128,7 +141,9 @@ func (p *Participant) Abort(txID string) *protocol.AbortResponse {
 
 	// Abort on the node
 	if err := p.node.Abort(txID); err != nil {
+	
 		log.Printf("[Participant %s] Failed to abort transaction %s: %v", p.node.Addr, txID, err)
+	
 		return &protocol.AbortResponse{
 			Success: false,
 			Error:   err.Error(),
@@ -140,6 +155,7 @@ func (p *Participant) Abort(txID string) *protocol.AbortResponse {
 	delete(p.transactions, txID)
 
 	log.Printf("[Participant %s] Aborted transaction %s", p.node.Addr, txID)
+	
 	return &protocol.AbortResponse{
 		Success: true,
 	}
@@ -158,8 +174,10 @@ func (p *Participant) GetPendingTransactions() []string {
 	defer p.mu.RUnlock()
 
 	txIDs := make([]string, 0, len(p.transactions))
+	
 	for id := range p.transactions {
 		txIDs = append(txIDs, id)
 	}
+	
 	return txIDs
 }

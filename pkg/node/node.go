@@ -302,6 +302,7 @@ func isAlreadyFinishedErr(err error) bool {
 	if err == nil {
 		return false
 	}
+
 	return strings.Contains(err.Error(), "already been committed") ||
 		strings.Contains(err.Error(), "already been rolled back") ||
 		strings.Contains(err.Error(), "already been committed or rolled back")
@@ -325,6 +326,7 @@ func (n *Node) GetAlive() bool {
 func (n *Node) SetRole(role protocol.NodeRole) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
+
 	n.Role = role
 }
 
@@ -332,6 +334,7 @@ func (n *Node) SetRole(role protocol.NodeRole) {
 func (n *Node) GetRole() protocol.NodeRole {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
+
 	return n.Role
 }
 
@@ -388,7 +391,11 @@ func (n *Node) Prepare(txID string, payload any) (bool, error) {
 		}
 
 		res, err := tx.ExecContext(opCtx,
-			`INSERT INTO distributed_tx (tx_id, payload, status) VALUES ($1, $2::jsonb, 'PREPARED')`,
+			`INSERT INTO distributed_tx (
+				tx_id, 
+				payload, 
+				status
+				) VALUES ($1, $2::jsonb, 'PREPARED')`,
 			txID, string(payloadBytes),
 		)
 		if err != nil {
@@ -401,6 +408,7 @@ func (n *Node) Prepare(txID string, payload any) (bool, error) {
 			_ = tx.Rollback()
 			return false, err
 		}
+
 		if rows == 0 {
 			_ = tx.Rollback()
 			return false, errors.New("transaction already exists")
@@ -419,6 +427,7 @@ func (n *Node) Prepare(txID string, payload any) (bool, error) {
 
 	n.TxState = protocol.StateReady
 	log.Printf("[Node %s] Prepared transaction %s", n.Addr, txID)
+
 	return true, nil
 }
 
@@ -432,7 +441,17 @@ func (n *Node) Commit(txID string) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		if _, err := tx.ExecContext(ctx, `UPDATE distributed_tx SET status='COMMITTED', updated_at=NOW() WHERE tx_id=$1`, txID); err != nil {
+		if _, err := tx.ExecContext(
+			ctx,
+			`UPDATE 
+				distributed_tx 
+			SET 
+				status='COMMITTED', 
+				updated_at=NOW() 
+			WHERE 
+			tx_id=$1`,
+			txID,
+		); err != nil {
 			if !isAlreadyFinishedErr(err) {
 				_ = tx.Rollback()
 				log.Printf("[Node %s] Failed to update status for %s: %v", n.Addr, txID, err)
@@ -449,11 +468,21 @@ func (n *Node) Commit(txID string) error {
 
 		// Ensure we only drop it once; committing again should be idempotent
 		delete(n.pendingTx, txID)
+
 	} else if n.db != nil {
 		// Idempotent handling: mark as committed even if we already applied it
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if _, err := n.db.ExecContext(ctx, `UPDATE distributed_tx SET status='COMMITTED', updated_at=NOW() WHERE tx_id=$1`, txID); err != nil {
+		if _, err := n.db.ExecContext(
+			ctx,
+			`UPDATE 
+				distributed_tx 
+			SET 
+				status='COMMITTED', 
+				updated_at=NOW() 
+			WHERE tx_id=$1`,
+			txID,
+		); err != nil {
 			log.Printf("[Node %s] Idempotent commit update failed for %s: %v", n.Addr, txID, err)
 			return err
 		}
@@ -481,11 +510,22 @@ func (n *Node) Abort(txID string) error {
 			}
 		}
 		delete(n.pendingTx, txID)
+
 	} else if n.db != nil {
 		// Idempotent rollback path when the tx was already committed/rolled back
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if _, err := n.db.ExecContext(ctx, `UPDATE distributed_tx SET status='ABORTED', updated_at=NOW() WHERE tx_id=$1`, txID); err != nil {
+		if _, err := n.db.ExecContext(
+			ctx,
+			`UPDATE 
+				distributed_tx
+			SET 
+				status='ABORTED', 
+				updated_at=NOW() 
+			WHERE 
+				tx_id=$1`,
+			txID,
+		); err != nil {
 			log.Printf("[Node %s] Idempotent abort update failed for %s: %v", n.Addr, txID, err)
 			return err
 		}
@@ -504,6 +544,7 @@ func (n *Node) HasPendingTransaction(txID string) bool {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
 	_, exists := n.pendingData[txID]
+
 	return exists
 }
 
@@ -516,5 +557,6 @@ func (n *Node) GetPendingTransactions() []string {
 	for txID := range n.pendingData {
 		txIDs = append(txIDs, txID)
 	}
+
 	return txIDs
 }

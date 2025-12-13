@@ -126,7 +126,7 @@ func (c *Cluster) GetNodeAddresses() []string {
 	}
 
 	sort.Strings(addrs)
-	
+
 	return addrs
 }
 
@@ -146,6 +146,6 @@ func (c *Cluster) IsMasterAlive() bool {
 	if c.master == nil {
 		return false
 	}
-	
+
 	return c.master.GetAlive()
 }
