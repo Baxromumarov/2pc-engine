@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"flag"
+	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -24,6 +27,9 @@ func main() {
 	heartbeatInterval := flag.Duration("heartbeat", 5*time.Second, "Heartbeat interval")
 	coordTimeout := flag.Duration("coord-timeout", 10*time.Second, "2PC coordinator timeout")
 	dsn := flag.String("dsn", "", "Postgres DSN (e.g., postgres://user:pass@localhost:5432/db?sslmode=disable). Falls back to POSTGRES_DSN env var.")
+	name := flag.String("name", "", "Display name for this node (optional)")
+	stateFile := flag.String("state-file", "cluster_state.enc", "Path to encrypted cluster state file (optional)")
+	stateKey := flag.String("state-key", "", "Encryption key for state file (optional, fallback CLUSTER_STATE_KEY)")
 	flag.Parse()
 
 	if *addr == "" {
@@ -54,7 +60,25 @@ func main() {
 	clstr := cluster.NewCluster()
 	localNode := node.NewNodeWithDB(*addr, protocol.RoleSlave, db)
 	localNode.SetAlive(true)
+	if *name != "" {
+		localNode.SetName(*name)
+	}
+
+	localNode.SetDatabase(maskDSN(effectiveDSN))
 	clstr.AddNode(localNode)
+
+	effectiveStateKey := *stateKey
+	if effectiveStateKey == "" {
+		effectiveStateKey = os.Getenv("CLUSTER_STATE_KEY")
+	}
+
+	stateStore := cluster.NewStateStore(*stateFile, effectiveStateKey)
+	if *stateFile != "" && stateStore == nil {
+		log.Printf("[Node] Persistence disabled: state key missing (set --state-key or CLUSTER_STATE_KEY)")
+	}
+
+	persistState := func() {}
+	client := transport.NewHTTPClient(5 * time.Second)
 
 	if *nodes != "" {
 		for _, nAddr := range strings.Split(*nodes, ",") {
@@ -65,6 +89,21 @@ func main() {
 			n := node.NewNode(nAddr, protocol.RoleSlave)
 			n.SetAlive(true)
 			clstr.AddNode(n)
+		}
+	}
+
+	if stateStore != nil {
+		if loaded, err := stateStore.Load(); err != nil {
+			log.Printf("[Node] Failed to load cluster state: %v", err)
+		} else if loaded != nil {
+			cluster.ApplyState(clstr, loaded, localNode)
+			log.Printf("[Node] Loaded %d nodes from state file", len(loaded.Nodes))
+		}
+
+		persistState = func() {
+			if err := stateStore.SaveCluster(clstr); err != nil {
+				log.Printf("[Node] Failed to persist cluster state: %v", err)
+			}
 		}
 	}
 
@@ -103,22 +142,89 @@ func main() {
 		}, nil
 	})
 
-	server.SetAddNodeHandler(func(addr string) error {
+	server.SetAddNodeHandler(func(addr, name, database string) error {
 		n := node.NewNode(addr, protocol.RoleSlave)
 		n.SetAlive(true)
+		if name != "" {
+			n.SetName(name)
+		}
+		if database != "" {
+			n.SetDatabase(database)
+		}
 		clstr.AddNode(n)
 		log.Printf("[Node] Added node %s to cluster", addr)
+		persistState()
 		return nil
 	})
 
+	server.SetRemoveNodeHandler(func(addr string) error {
+		clstr.RemoveNode(addr)
+		log.Printf("[Node] Removed node %s from cluster", addr)
+		clstr.CheckAndElect()
+		persistState()
+		return nil
+	})
+
+	server.SetNameHandler(func(addr, name string) error {
+		if ok := clstr.SetNodeName(addr, name); !ok {
+			return fmt.Errorf("node %s not found", addr)
+		}
+		persistState()
+		return nil
+	})
+
+	server.SetTransactionsHandler(func(addr string, page, limit int, status string) (*protocol.TransactionListResponse, error) {
+		target := addr
+		if target == "" {
+			target = localNode.Addr
+		}
+		if target == localNode.Addr {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			records, total, err := localNode.ListTransactions(ctx, page, limit, status)
+			if err != nil {
+				return nil, err
+			}
+			return &protocol.TransactionListResponse{
+				Transactions: records,
+				Total:        total,
+				Page:         page,
+				Limit:        limit,
+				Address:      target,
+				HasDB:        localNode.HasDB(),
+			}, nil
+		}
+
+		return client.Transactions(target, page, limit, status)
+	})
+
 	server.SetClusterInfoHandler(func() *protocol.ClusterInfoResponse {
-		nodes := clstr.GetNodes()
-		nodeInfos := make([]protocol.NodeInfo, 0, len(nodes))
-		for _, n := range nodes {
+		addrs := clstr.GetNodeAddresses()
+		nodeInfos := make([]protocol.NodeInfo, 0, len(addrs))
+		for _, nodeAddr := range addrs {
+			n := clstr.GetNode(nodeAddr)
+			if n == nil {
+				continue
+			}
+
+			// For the local node, use local metrics; for remote nodes, fetch via HTTP
+			var metrics protocol.NodeMetrics
+			if nodeAddr == *addr {
+				metrics = n.Metrics()
+			} else {
+				if remoteMetrics, err := client.GetMetrics(nodeAddr); err == nil {
+					metrics = *remoteMetrics
+				}
+				// On error, metrics stays zero-valued
+			}
+
 			nodeInfos = append(nodeInfos, protocol.NodeInfo{
-				Address: n.Addr,
-				Role:    string(n.GetRole()),
-				Alive:   n.GetAlive(),
+				Name:     n.GetName(),
+				Address:  n.Addr,
+				Role:     string(n.GetRole()),
+				Alive:    n.GetAlive(),
+				Database: n.GetDatabase(),
+				Metrics:  metrics,
 			})
 		}
 
@@ -131,6 +237,7 @@ func main() {
 		return &protocol.ClusterInfoResponse{
 			MasterAddr: masterAddr,
 			Nodes:      nodeInfos,
+			Generated:  time.Now(),
 		}
 	})
 
@@ -140,6 +247,7 @@ func main() {
 
 	// Trigger an initial election based on current health (will be refined by heartbeat checks)
 	clstr.CheckAndElect()
+	persistState()
 
 	// Handle graceful shutdown
 	sigCh := make(chan os.Signal, 1)
@@ -159,4 +267,24 @@ func main() {
 	if err := server.Start(); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}
+}
+
+func maskDSN(dsn string) string {
+	if dsn == "" {
+		return ""
+	}
+
+	if u, err := url.Parse(dsn); err == nil {
+		if u.User != nil {
+			username := u.User.Username()
+			u.User = url.UserPassword(username, "****")
+		}
+		return u.String()
+	}
+
+	if at := strings.Index(dsn, "@"); at > 0 {
+		return "****@" + dsn[at+1:]
+	}
+
+	return dsn
 }

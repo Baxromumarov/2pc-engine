@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"sort"
 	"strconv"
@@ -28,10 +29,12 @@ const distTx = "distributed_tx"
 
 // Node represents a single node in the distributed system
 type Node struct {
-	Addr    string            // address of the node (e.g., "localhost:8081")
-	Role    protocol.NodeRole // MASTER or SLAVE
-	IsAlive bool              // health status
-	TxState protocol.TxState  // current transaction state
+	Addr     string            // address of the node (e.g., "localhost:8081")
+	Name     string            // display name for UI
+	Role     protocol.NodeRole // MASTER or SLAVE
+	IsAlive  bool              // health status
+	TxState  protocol.TxState  // current transaction state
+	Database string            // optional metadata about backing DB (for dashboards)
 
 	// Transaction management
 	pendingTx   map[string]*sql.Tx // map of transaction_id -> pending transaction
@@ -44,10 +47,21 @@ type Node struct {
 	schemaErr  error
 }
 
+// NodeStats tracks lightweight telemetry for operational visibility.
+type NodeStats struct {
+	Prepared    uint64
+	Committed   uint64
+	Aborted     uint64
+	Failed      uint64
+	LastError   string
+	LastUpdated time.Time
+}
+
 // NewNode creates a new node instance
 func NewNode(addr string, role protocol.NodeRole) *Node {
 	return &Node{
 		Addr:        addr,
+		Name:        addr,
 		Role:        role,
 		IsAlive:     true,
 		TxState:     protocol.StateInit,
@@ -64,6 +78,184 @@ func NewNodeWithDB(addr string, role protocol.NodeRole, db *sql.DB) *Node {
 	n.schemaErr = nil
 
 	return n
+}
+
+// Metrics returns an immutable snapshot of the node telemetry.
+func (n *Node) Metrics() protocol.NodeMetrics {
+	n.mu.RLock()
+	inFlight := len(n.pendingData)
+	n.mu.RUnlock()
+
+	var committed uint64
+	var aborted uint64
+	var failed uint64
+
+	if dbCommitted, dbAborted, dbFailed, ok := n.fetchDBCounters(); ok {
+		committed = dbCommitted
+		aborted = dbAborted
+		failed = dbFailed
+	}
+
+	totalAttempts := committed + aborted + failed
+	successRate := 0.0
+	if totalAttempts > 0 {
+		successRate = (float64(committed) / float64(totalAttempts)) * 100
+	}
+
+	return protocol.NodeMetrics{
+		Committed:   committed,
+		Aborted:     aborted,
+		Failed:      failed,
+		InFlight:    inFlight,
+		SuccessRate: successRate,
+	}
+}
+
+// HasDB indicates if this node was started with a real database.
+func (n *Node) HasDB() bool {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	return n.db != nil
+}
+
+func (n *Node) fetchDBCounters() (
+	committed uint64,
+	aborted uint64,
+	failed uint64,
+	ok bool,
+) {
+	n.mu.RLock()
+	db := n.db
+	n.mu.RUnlock()
+
+	if db == nil {
+		return 0, 0, 0, false
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	if err := n.ensureSchema(ctx); err != nil {
+		log.Printf("[Node %s] fetchDBCounters ensureSchema error: %v", n.Addr, err)
+		return 0, 0, 0, false
+	}
+
+	if err := db.QueryRowContext(ctx, `
+		SELECT
+			COALESCE(COUNT(*) FILTER (WHERE status='COMMITTED'), 0) AS committed,
+			COALESCE(COUNT(*) FILTER (WHERE status='ABORTED'), 0)   AS aborted,
+			COALESCE(COUNT(*) FILTER (WHERE status NOT IN ('COMMITTED','ABORTED','PREPARED')), 0) AS failed
+		FROM distributed_tx`).Scan(
+		&committed,
+		&aborted,
+		&failed,
+	); err != nil {
+
+		log.Printf("[Node %s] fetchDBCounters scan error: %v", n.Addr, err)
+		return 0, 0, 0, false
+	}
+
+	return committed, aborted, failed, true
+}
+
+// ListTransactions returns paginated distributed_tx entries when a DB is configured.
+func (n *Node) ListTransactions(ctx context.Context, page, limit int, status string) ([]protocol.TransactionRecord, int, error) {
+	n.mu.RLock()
+	db := n.db
+	n.mu.RUnlock()
+
+	if db == nil {
+		return []protocol.TransactionRecord{}, 0, nil
+	}
+
+	// Ensure schema exists to avoid errors on empty/new databases.
+	schemaCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	if err := n.ensureSchema(schemaCtx); err != nil {
+		return nil, 0, err
+	}
+
+	// Normalize pagination parameters
+	switch {
+	case limit <= 0:
+		limit = 20
+	case limit > 100:
+		limit = 100
+	}
+	if page <= 0 {
+		page = 1
+	}
+	offset := (page - 1) * limit
+
+	// Build count query with parameterized status filter
+	var total int
+	var countQuery = `SELECT COUNT(*) FROM distributed_tx WHERE 1=1 `
+	var args []any
+
+	if status != "" {
+		args = append(args, status)
+		countQuery += `AND status = $1 `
+	}
+
+	if err := db.QueryRowContext(ctx,
+		countQuery,
+		args...,
+	).Scan(
+		&total,
+	); err != nil {
+		return nil, 0, err
+	}
+
+	query := `SELECT 
+				tx_id, 
+				status, 
+				payload, 
+				created_at, 
+				updated_at
+			FROM 
+				distributed_tx
+			WHERE 1=1 `
+	args = []any{}
+	argPos := 1
+
+	if status != "" {
+		query += fmt.Sprintf("AND status = $%d\n", argPos)
+		args = append(args, status)
+		argPos++
+	}
+
+	query += fmt.Sprintf("ORDER BY created_at DESC OFFSET $%d LIMIT $%d", argPos, argPos+1)
+	args = append(args, offset, limit)
+
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	records := make([]protocol.TransactionRecord, 0, limit)
+	for rows.Next() {
+		var rec protocol.TransactionRecord
+		var payloadRaw []byte
+
+		if err := rows.Scan(
+			&rec.TxID,
+			&rec.Status,
+			&payloadRaw,
+			&rec.CreatedAt,
+			&rec.UpdatedAt,
+		); err != nil {
+			return nil, 0, err
+		}
+
+		if len(payloadRaw) > 0 {
+			_ = json.Unmarshal(payloadRaw, &rec.Payload)
+		}
+
+		records = append(records, rec)
+	}
+
+	return records, total, rows.Err()
 }
 
 // ensureSchema creates the transactions table if needed
@@ -338,6 +530,45 @@ func (n *Node) GetRole() protocol.NodeRole {
 	return n.Role
 }
 
+// SetDatabase sets a display-friendly database label/DSN for dashboards.
+func (n *Node) SetDatabase(db string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
+	n.Database = db
+}
+
+// GetDatabase returns the configured database label/DSN (if any).
+func (n *Node) GetDatabase() string {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+
+	return n.Database
+}
+
+// SetName sets the display name for the node.
+func (n *Node) SetName(name string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
+	if name == "" {
+		n.Name = n.Addr
+		return
+	}
+	n.Name = name
+}
+
+// GetName returns the display name (falls back to address).
+func (n *Node) GetName() string {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+
+	if n.Name == "" {
+		return n.Addr
+	}
+	return n.Name
+}
+
 // Prepare handles the prepare phase of 2PC
 // Returns true if ready to commit, false otherwise
 func (n *Node) Prepare(txID string, payload any) (bool, error) {
@@ -346,7 +577,8 @@ func (n *Node) Prepare(txID string, payload any) (bool, error) {
 
 	// Check if we already have a pending transaction with this ID
 	if _, exists := n.pendingData[txID]; exists {
-		return false, errors.New("transaction already in progress")
+		err := errors.New("transaction already in progress")
+		return false, err
 	}
 
 	// If we have a real database connection, start a transaction and persist the payload
@@ -411,7 +643,8 @@ func (n *Node) Prepare(txID string, payload any) (bool, error) {
 
 		if rows == 0 {
 			_ = tx.Rollback()
-			return false, errors.New("transaction already exists")
+			err := errors.New("transaction already exists")
+			return false, err
 		}
 
 		n.pendingTx[txID] = tx

@@ -149,3 +149,17 @@ func (c *Cluster) IsMasterAlive() bool {
 
 	return c.master.GetAlive()
 }
+
+// SetNodeName updates the display name for a node.
+func (c *Cluster) SetNodeName(addr, name string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	n, ok := c.nodes[addr]
+	if !ok {
+		return false
+	}
+
+	n.SetName(name)
+	return true
+}

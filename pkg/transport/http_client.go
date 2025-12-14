@@ -94,6 +94,28 @@ func (c *HTTPClient) GetRole(addr string) (*protocol.RoleResponse, error) {
 	return &role, nil
 }
 
+// GetMetrics fetches metrics from a remote node
+func (c *HTTPClient) GetMetrics(addr string) (*protocol.NodeMetrics, error) {
+	resp, err := c.doWithRetry(func() (*http.Response, error) {
+		return c.client.Get(fmt.Sprintf("http://%s/metrics", addr))
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("get metrics failed with status: %d", resp.StatusCode)
+	}
+
+	var metrics protocol.NodeMetrics
+	if err := json.NewDecoder(resp.Body).Decode(&metrics); err != nil {
+		return nil, err
+	}
+
+	return &metrics, nil
+}
+
 // Prepare sends a prepare request to a node
 func (c *HTTPClient) Prepare(addr string, req *protocol.PrepareRequest) (*protocol.PrepareResponse, error) {
 	resp, err := c.postJSON(addr, "prepare", req)
@@ -138,6 +160,124 @@ func (c *HTTPClient) StartTransaction(masterAddr string, req *protocol.Transacti
 	return decodeTransactionResponse(resp.Body)
 }
 
+// ClusterInfo returns membership and node telemetry for dashboards/automation.
+func (c *HTTPClient) ClusterInfo(addr string) (*protocol.ClusterDashboardResponse, error) {
+	resp, err := c.doWithRetry(func() (*http.Response, error) {
+		return c.client.Get(fmt.Sprintf("http://%s/cluster/summary", addr))
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("cluster info failed with status: %d", resp.StatusCode)
+	}
+
+	var info protocol.ClusterDashboardResponse
+	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+		return nil, err
+	}
+
+	return &info, nil
+}
+
+// AddNode registers a new node with the cluster.
+func (c *HTTPClient) AddNode(masterAddr string, req *protocol.AddNodeRequest) (*protocol.AddNodeResponse, error) {
+	resp, err := c.postJSON(masterAddr, "cluster/add", req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var addResp protocol.AddNodeResponse
+	if err := json.NewDecoder(resp.Body).Decode(&addResp); err != nil {
+		return nil, err
+	}
+
+	if !addResp.Success {
+		if addResp.Error != "" {
+			return nil, fmt.Errorf("add node failed: %s", addResp.Error)
+		}
+		return nil, fmt.Errorf("add node failed with status: %d", resp.StatusCode)
+	}
+
+	return &addResp, nil
+}
+
+// RemoveNode removes a node from the cluster.
+func (c *HTTPClient) RemoveNode(masterAddr string, req *protocol.RemoveNodeRequest) (*protocol.RemoveNodeResponse, error) {
+	resp, err := c.postJSON(masterAddr, "cluster/remove", req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var remResp protocol.RemoveNodeResponse
+	if err := json.NewDecoder(resp.Body).Decode(&remResp); err != nil {
+		return nil, err
+	}
+
+	if !remResp.Success {
+		if remResp.Error != "" {
+			return nil, fmt.Errorf("remove node failed: %s", remResp.Error)
+		}
+		return nil, fmt.Errorf("remove node failed with status: %d", resp.StatusCode)
+	}
+
+	return &remResp, nil
+}
+
+// NameNode sets a display name for a node.
+func (c *HTTPClient) NameNode(masterAddr string, req *protocol.SetNameRequest) (*protocol.SetNameResponse, error) {
+	resp, err := c.postJSON(masterAddr, "cluster/name", req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var nameResp protocol.SetNameResponse
+	if err := json.NewDecoder(resp.Body).Decode(&nameResp); err != nil {
+		return nil, err
+	}
+
+	if !nameResp.Success {
+		if nameResp.Error != "" {
+			return nil, fmt.Errorf("set name failed: %s", nameResp.Error)
+		}
+		return nil, fmt.Errorf("set name failed with status: %d", resp.StatusCode)
+	}
+
+	return &nameResp, nil
+}
+
+// Transactions fetches paginated transaction list from a node.
+func (c *HTTPClient) Transactions(addr string, page, limit int, status string) (*protocol.TransactionListResponse, error) {
+	url := fmt.Sprintf("http://%s/transactions?page=%d&limit=%d", addr, page, limit)
+	if status != "" {
+		url += "&status=" + status
+	}
+
+	resp, err := c.doWithRetry(func() (*http.Response, error) {
+		return c.client.Get(url)
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("transactions failed with status: %d", resp.StatusCode)
+	}
+
+	var txResp protocol.TransactionListResponse
+	if err := json.NewDecoder(resp.Body).Decode(&txResp); err != nil {
+		return nil, err
+	}
+
+	return &txResp, nil
+}
+
 func (c *HTTPClient) postJSON(addr, path string, payload any) (*http.Response, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -157,7 +297,7 @@ func (c *HTTPClient) doWithRetry(do func() (*http.Response, error)) (*http.Respo
 	attempts := c.maxRetries + 1
 	var lastErr error
 
-	for attempt := 0; attempt < attempts; attempt++ {
+	for attempt := range attempts {
 		resp, err := do()
 		if err == nil && resp.StatusCode < http.StatusInternalServerError {
 			return resp, nil

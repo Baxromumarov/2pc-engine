@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/baxromumarov/2pc-engine/pkg/node"
 	"github.com/baxromumarov/2pc-engine/pkg/protocol"
@@ -16,8 +18,11 @@ type HTTPServer struct {
 	server         *http.Server
 	onTransaction  func(payload any) (*protocol.TransactionResponse, error) // callback for master
 	onJoin         func(addr string) (*protocol.JoinResponse, error)        // callback for join requests
-	onAddNode      func(addr string) error                                  // callback to add node to cluster
-	getClusterInfo func() *protocol.ClusterInfoResponse                     // callback to get cluster info
+	onAddNode      func(addr, name, database string) error                  // callback to add node to cluster
+	onRemoveNode   func(addr string) error                                  // callback to remove node from cluster
+	onSetName      func(addr, name string) error                            // callback to set node name
+	onListTx       func(addr string, page, limit int, status string) (*protocol.TransactionListResponse, error)
+	getClusterInfo func() *protocol.ClusterInfoResponse // callback to get cluster info
 }
 
 // NewHTTPServer creates a new HTTP server for a node
@@ -41,8 +46,23 @@ func (s *HTTPServer) SetJoinHandler(handler func(addr string) (*protocol.JoinRes
 }
 
 // SetAddNodeHandler sets the callback for adding nodes to the cluster
-func (s *HTTPServer) SetAddNodeHandler(handler func(addr string) error) {
+func (s *HTTPServer) SetAddNodeHandler(handler func(addr, name, database string) error) {
 	s.onAddNode = handler
+}
+
+// SetRemoveNodeHandler sets the callback for removing nodes from the cluster
+func (s *HTTPServer) SetRemoveNodeHandler(handler func(addr string) error) {
+	s.onRemoveNode = handler
+}
+
+// SetNameHandler sets the callback for naming nodes.
+func (s *HTTPServer) SetNameHandler(handler func(addr, name string) error) {
+	s.onSetName = handler
+}
+
+// SetTransactionsHandler sets the callback for listing transactions.
+func (s *HTTPServer) SetTransactionsHandler(handler func(addr string, page, limit int, status string) (*protocol.TransactionListResponse, error)) {
+	s.onListTx = handler
 }
 
 // SetClusterInfoHandler sets the callback for getting cluster info
@@ -53,6 +73,7 @@ func (s *HTTPServer) SetClusterInfoHandler(handler func() *protocol.ClusterInfoR
 func (s *HTTPServer) setupRoutes() {
 	s.mux.HandleFunc("/health", s.handleHealth)
 	s.mux.HandleFunc("/role", s.handleRole)
+	s.mux.HandleFunc("/metrics", s.handleMetrics)
 	s.mux.HandleFunc("/prepare", s.handlePrepare)
 	s.mux.HandleFunc("/commit", s.handleCommit)
 	s.mux.HandleFunc("/abort", s.handleAbort)
@@ -60,6 +81,13 @@ func (s *HTTPServer) setupRoutes() {
 	s.mux.HandleFunc("/cluster/join", s.handleJoin)
 	s.mux.HandleFunc("/cluster/nodes", s.handleClusterNodes)
 	s.mux.HandleFunc("/cluster/add", s.handleAddNode)
+	s.mux.HandleFunc("/cluster/remove", s.handleRemoveNode)
+	s.mux.HandleFunc("/cluster/summary", s.handleClusterSummary)
+	s.mux.HandleFunc("/cluster/name", s.handleSetName)
+	s.mux.HandleFunc("/transactions", s.handleTransactions)
+	s.mux.HandleFunc("/dashboard", s.handleDashboard)
+	s.mux.HandleFunc("/ui", s.handleDashboard)
+	s.mux.HandleFunc("/", s.handleDashboard)
 }
 
 // Start starts the HTTP server
@@ -112,6 +140,18 @@ func (s *HTTPServer) handleRole(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+}
+
+// handleMetrics returns the local node's metrics from the database
+func (s *HTTPServer) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	metrics := s.node.Metrics()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(metrics)
 }
 
 // handlePrepare handles prepare phase requests
@@ -343,15 +383,7 @@ func (s *HTTPServer) handleClusterNodes(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if s.getClusterInfo == nil {
-		http.Error(w, "Cluster info handler not configured", http.StatusInternalServerError)
-		return
-	}
-
-	info := s.getClusterInfo()
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(info)
+	s.writeClusterInfo(w)
 }
 
 // handleAddNode handles requests to add a new node to the cluster
@@ -373,6 +405,17 @@ func (s *HTTPServer) handleAddNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if req.Address == "" {
+		resp := protocol.AddNodeResponse{
+			Success: false,
+			Error:   "Address is required",
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(resp)
+		return
+	}
+
 	if s.onAddNode == nil {
 		resp := protocol.AddNodeResponse{
 			Success: false,
@@ -384,9 +427,9 @@ func (s *HTTPServer) handleAddNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("[Node %s] Adding new node: %s", s.node.Addr, req.Address)
+	log.Printf("[Node %s] Adding new node: %s (db: %s)", s.node.Addr, req.Address, req.Database)
 
-	if err := s.onAddNode(req.Address); err != nil {
+	if err := s.onAddNode(req.Address, req.Name, req.Database); err != nil {
 		resp := protocol.AddNodeResponse{
 			Success: false,
 			Error:   err.Error(),
@@ -403,4 +446,212 @@ func (s *HTTPServer) handleAddNode(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(resp)
+}
+
+// handleRemoveNode handles requests to remove a node from the cluster
+func (s *HTTPServer) handleRemoveNode(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req protocol.RemoveNodeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		resp := protocol.RemoveNodeResponse{
+			Success: false,
+			Error:   "Invalid request body",
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(resp)
+		return
+	}
+
+	if req.Address == "" {
+		resp := protocol.RemoveNodeResponse{
+			Success: false,
+			Error:   "Address is required",
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(resp)
+		return
+	}
+
+	if s.onRemoveNode == nil {
+		resp := protocol.RemoveNodeResponse{
+			Success: false,
+			Error:   "Remove node handler not configured",
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(resp)
+		return
+	}
+
+	log.Printf("[Node %s] Removing node: %s", s.node.Addr, req.Address)
+
+	if err := s.onRemoveNode(req.Address); err != nil {
+		resp := protocol.RemoveNodeResponse{
+			Success: false,
+			Error:   err.Error(),
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(resp)
+		return
+	}
+
+	resp := protocol.RemoveNodeResponse{
+		Success: true,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(resp)
+}
+
+// handleClusterSummary returns enriched cluster info with metrics
+func (s *HTTPServer) handleClusterSummary(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	s.writeClusterInfo(w)
+}
+
+// handleTransactions returns paginated transactions for a node.
+func (s *HTTPServer) handleTransactions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if s.onListTx == nil {
+		http.Error(w, "Transactions handler not configured", http.StatusInternalServerError)
+		return
+	}
+
+	addr := r.URL.Query().Get("address")
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	status := r.URL.Query().Get("status")
+
+	resp, err := s.onListTx(addr, page, limit, status)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if resp == nil {
+		resp = &protocol.TransactionListResponse{
+			Transactions: []protocol.TransactionRecord{},
+			Total:        0,
+			Page:         page,
+			Limit:        limit,
+			Address:      addr,
+			HasDB:        false,
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
+// handleSetName sets a display name for a node.
+func (s *HTTPServer) handleSetName(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req protocol.SetNameRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		resp := protocol.SetNameResponse{
+			Success: false,
+			Error:   "Invalid request body",
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(resp)
+		return
+	}
+
+	if req.Address == "" {
+		resp := protocol.SetNameResponse{
+			Success: false,
+			Error:   "Address is required",
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(resp)
+		return
+	}
+
+	if s.onSetName == nil {
+		resp := protocol.SetNameResponse{
+			Success: false,
+			Error:   "Set name handler not configured",
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(resp)
+		return
+	}
+
+	if err := s.onSetName(req.Address, req.Name); err != nil {
+		resp := protocol.SetNameResponse{
+			Success: false,
+			Error:   err.Error(),
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(resp)
+		return
+	}
+
+	resp := protocol.SetNameResponse{Success: true}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(resp)
+}
+
+func (s *HTTPServer) writeClusterInfo(w http.ResponseWriter) {
+	if s.getClusterInfo == nil {
+		http.Error(w, "Cluster info handler not configured", http.StatusInternalServerError)
+		return
+	}
+
+	info := s.getClusterInfo()
+	if info == nil {
+		http.Error(w, "Cluster info unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	if info.Generated.IsZero() {
+		info.Generated = time.Now()
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(info)
+}
+
+func (s *HTTPServer) handleDashboard(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	switch r.URL.Path {
+	case "/", "/dashboard", "/ui":
+		if dashboardPage == "" {
+			http.Error(w, "Dashboard not available", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(dashboardPage))
+	default:
+		http.NotFound(w, r)
+	}
 }

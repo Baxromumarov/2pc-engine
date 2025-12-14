@@ -272,32 +272,7 @@ go test -coverpkg=./... ./pkg/two_phase_commit
 go test ./... -v
 ```
 
-## Docker Deployment
 
-### Using Docker Compose
-
-```bash
-# Start the cluster (master + 2 nodes)
-docker-compose -f docker-compose.prod.yml up -d
-
-# Add a third node dynamically
-docker-compose -f docker-compose.prod.yml --profile scale up -d node3
-curl -X POST http://localhost:8080/cluster/join -d '{"address":"node3:8080"}'
-
-# Check cluster status
-curl http://localhost:8080/cluster/nodes
-
-# Execute a transaction
-curl -X POST http://localhost:8080/transaction \
-  -H "Content-Type: application/json" \
-  -d '{"payload":{"table":"users","operation":"update","values":{"balance":100},"where":{"id":1}}}'
-```
-
-### Building Docker Image
-
-```bash
-docker build -t 2pc-engine .
-```
 
 ## Architecture
 
@@ -328,8 +303,6 @@ docker build -t 2pc-engine .
                               └─────────────┘
 ```
 
-## License
-
-MIT
+## License MIT
 
 Note: Description is written in AI

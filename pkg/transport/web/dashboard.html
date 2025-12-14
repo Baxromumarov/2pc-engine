@@ -1,0 +1,790 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>2PC Engine • Cluster Dashboard</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap');
+    :root {
+      --bg: #0b1221;
+      --panel: #0f1c2e;
+      --panel-strong: #14263d;
+      --muted: #8ca5c4;
+      --text: #ecf3ff;
+      --accent: #5ce0a1;
+      --accent-2: #ff8b6a;
+      --danger: #ff5d7d;
+      --shadow: 0 12px 40px rgba(0,0,0,0.35);
+      --radius: 16px;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: 'Space Grotesk', 'Segoe UI', sans-serif;
+      background: radial-gradient(circle at 20% 20%, rgba(92,224,161,0.08), transparent 30%),
+                  radial-gradient(circle at 80% 10%, rgba(255,139,106,0.10), transparent 25%),
+                  radial-gradient(circle at 50% 100%, rgba(59,128,246,0.08), transparent 28%),
+                  var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 24px;
+    }
+    .page { max-width: 1200px; margin: 0 auto; }
+    .hero {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 24px;
+      padding: 20px 24px;
+      background: linear-gradient(135deg, rgba(20,38,61,0.85), rgba(20,38,61,0.6));
+      border: 1px solid rgba(92,224,161,0.18);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+    }
+    .hero h1 { margin: 6px 0 8px; font-size: 28px; letter-spacing: -0.02em; }
+    .hero p { margin: 0; color: var(--muted); max-width: 620px; }
+    .eyebrow {
+      text-transform: uppercase;
+      letter-spacing: 0.18em;
+      font-size: 12px;
+      color: var(--accent);
+    }
+    .hero-actions {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 10px;
+      min-width: 220px;
+    }
+    .button {
+      border: none;
+      cursor: pointer;
+      padding: 12px 16px;
+      border-radius: 12px;
+      font-weight: 600;
+      color: #0b1221;
+      background: linear-gradient(120deg, var(--accent), #7df1bf);
+      box-shadow: 0 8px 24px rgba(92,224,161,0.45);
+      transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+    .button:hover { transform: translateY(-1px); box-shadow: 0 10px 28px rgba(92,224,161,0.55); }
+    .ghost {
+      background: transparent;
+      border: 1px solid rgba(255,255,255,0.12);
+      color: var(--text);
+      box-shadow: none;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.05);
+      color: var(--text);
+      font-size: 13px;
+    }
+    .dot {
+      width: 10px; height: 10px;
+      border-radius: 999px;
+      display: inline-block;
+      background: var(--muted);
+      box-shadow: 0 0 0 4px rgba(255,255,255,0.04);
+    }
+    .dot.up { background: var(--accent); }
+    .dot.down { background: var(--danger); }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 16px;
+      margin: 18px 0 10px;
+    }
+    .card {
+      background: linear-gradient(180deg, var(--panel), #0c1829);
+      border-radius: var(--radius);
+      border: 1px solid rgba(255,255,255,0.05);
+      padding: 16px;
+      box-shadow: var(--shadow);
+      min-height: 140px;
+    }
+    .card h3 { margin: 0 0 6px; }
+    .card p { margin: 0; color: var(--muted); }
+    .stat {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin: 6px 0;
+    }
+    .stat .label { color: var(--muted); font-size: 13px; }
+    .stat .value { font-family: 'JetBrains Mono', monospace; }
+    form { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+    label { font-size: 13px; color: var(--muted); }
+    input {
+      padding: 12px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.03);
+      color: var(--text);
+      font-family: inherit;
+    }
+    input::placeholder { color: rgba(255,255,255,0.35); }
+    .row {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+      margin-top: 6px;
+    }
+    .pill {
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.06);
+      color: var(--text);
+      font-size: 12px;
+    }
+    .pill.master { background: rgba(92,224,161,0.16); color: var(--accent); }
+    .pill.slave { background: rgba(255,255,255,0.05); }
+    .nodes {
+      margin-top: 14px;
+    }
+    .nodes-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+    .node-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 12px;
+    }
+    .node-card {
+      background: linear-gradient(180deg, #0f1f33, #0d1726);
+      border: 1px solid rgba(255,255,255,0.05);
+      border-radius: 14px;
+      padding: 14px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.25);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .node-title {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 4px;
+      font-weight: 600;
+    }
+    .muted { color: var(--muted); font-size: 13px; }
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0,1fr));
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .metric {
+      background: rgba(255,255,255,0.04);
+      border-radius: 10px;
+      padding: 8px;
+      border: 1px solid rgba(255,255,255,0.06);
+    }
+    .metric .label { font-size: 12px; color: var(--muted); margin-bottom: 4px; display: block; }
+    .metric .value { font-family: 'JetBrains Mono', monospace; }
+    .status-dot {
+      width: 10px; height: 10px; border-radius: 50%;
+      display: inline-block; margin-right: 6px;
+    }
+    .up { background: var(--accent); box-shadow: 0 0 0 4px rgba(92,224,161,0.15); }
+    .down { background: var(--danger); box-shadow: 0 0 0 4px rgba(255,93,125,0.12); }
+    .pill.small {
+      padding: 5px 8px;
+      font-size: 11px;
+    }
+    .actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 4px;
+    }
+    .chip-btn {
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(255,255,255,0.05);
+      color: var(--text);
+      border-radius: 10px;
+      padding: 6px 10px;
+      cursor: pointer;
+      font-size: 12px;
+      transition: background 0.15s ease, transform 0.1s ease;
+    }
+    .chip-btn:hover { background: rgba(255,255,255,0.08); transform: translateY(-1px); }
+    .chip-btn.danger { border-color: rgba(255,93,125,0.6); color: #ffc7d4; }
+    .overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(4,8,16,0.7);
+      backdrop-filter: blur(6px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      z-index: 999;
+    }
+    .hidden { display: none; }
+    .detail {
+      width: min(960px, 100%);
+      background: #0f1f33;
+      border-radius: 16px;
+      border: 1px solid rgba(255,255,255,0.07);
+      box-shadow: 0 16px 48px rgba(0,0,0,0.35);
+      padding: 20px;
+      color: var(--text);
+    }
+    .detail-header {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: flex-start;
+      margin-bottom: 12px;
+    }
+    .detail-meta {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px,1fr));
+      gap: 10px;
+      margin: 10px 0 16px;
+    }
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.08);
+      font-size: 12px;
+    }
+    .detail-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+    .table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+    }
+    .table th, .table td {
+      padding: 10px;
+      text-align: left;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+      font-size: 13px;
+    }
+    .table th { color: var(--muted); font-weight: 500; }
+    .mono { font-family: 'JetBrains Mono', monospace; }
+    .pagination {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 10px;
+      justify-content: flex-end;
+    }
+    .small-btn {
+      padding: 8px 12px;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.15);
+      background: rgba(255,255,255,0.06);
+      color: var(--text);
+      cursor: pointer;
+    }
+    .small-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    select.small-btn {
+      appearance: none;
+      background: linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.02));
+      padding-right: 28px;
+    }
+    .toast {
+      position: fixed;
+      bottom: 22px;
+      right: 22px;
+      padding: 12px 14px;
+      border-radius: 12px;
+      background: rgba(15,28,46,0.9);
+      border: 1px solid rgba(255,255,255,0.08);
+      color: var(--text);
+      opacity: 0;
+      transform: translateY(12px);
+      transition: opacity 0.2s ease, transform 0.2s ease;
+      box-shadow: var(--shadow);
+    }
+    .toast.show { opacity: 1; transform: translateY(0); }
+    .toast.error { border-color: rgba(255,93,125,0.7); color: #ffc7d4; }
+    @media (max-width: 768px) {
+      body { padding: 14px; }
+      .hero { flex-direction: column; align-items: flex-start; }
+      .hero-actions { width: 100%; align-items: flex-start; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div>
+        <div class="eyebrow">2PC Engine</div>
+        <h1>Cluster Dashboard</h1>
+        <p>Observe master + node health, load, and success rates. Add or evict nodes on the fly.</p>
+      </div>
+      <div class="hero-actions">
+        <button class="button" id="refreshBtn">Refresh now</button>
+        <div class="badge">
+          <span class="dot" id="masterDot"></span>
+          <span id="snapshot">Awaiting data…</span>
+        </div>
+      </div>
+    </header>
+
+    <section class="grid">
+      <div class="card" id="masterCard">
+        <h3>Master</h3>
+        <p class="muted">Current elected coordinator</p>
+        <div class="stat">
+          <span class="label">Address</span>
+          <span class="value" id="masterAddr">—</span>
+        </div>
+        <div class="stat">
+          <span class="label">Status</span>
+          <span class="value" id="masterStatus">—</span>
+        </div>
+        <div class="actions" style="margin-top:10px;">
+          <button class="chip-btn" id="masterRenameBtn">Rename</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Add node</h3>
+        <p class="muted">Nodes must already be running; this registers them with the master.</p>
+        <form id="addForm">
+          <div>
+            <label for="addName">Display name (optional)</label>
+            <input id="addName" type="text" placeholder="Payments shard A" />
+          </div>
+          <div>
+            <label for="addAddr">Node address</label>
+            <input id="addAddr" type="text" placeholder="host:port" required />
+          </div>
+          <div>
+            <label for="addDb">Database / DSN label (optional)</label>
+            <input id="addDb" type="text" placeholder="postgres://user:****@host:5432/db" />
+          </div>
+          <button class="button" type="submit">Add node</button>
+        </form>
+      </div>
+    </section>
+
+    <section class="nodes">
+      <div class="nodes-header">
+        <h3>Nodes</h3>
+        <span class="muted" id="nodeCount"></span>
+      </div>
+      <div class="node-grid" id="nodesGrid"></div>
+    </section>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <div class="overlay hidden" id="detailOverlay">
+    <div class="detail">
+      <div class="detail-header">
+        <div>
+          <div class="eyebrow" id="detailRole">Node</div>
+          <h2 id="detailName" style="margin:4px 0 6px;">Node</h2>
+          <div class="muted mono" id="detailAddr"></div>
+        </div>
+        <div class="detail-actions">
+          <button class="small-btn" id="detailClose">Close</button>
+        </div>
+      </div>
+      <div class="detail-meta">
+        <div class="metric">
+          <span class="label">Health</span>
+          <span class="value" id="detailHealth">—</span>
+        </div>
+        <div class="metric">
+          <span class="label">Success rate</span>
+          <span class="value" id="detailSuccess">—</span>
+        </div>
+        <div class="metric">
+          <span class="label">Load (in flight)</span>
+          <span class="value" id="detailLoad">—</span>
+        </div>
+      </div>
+      <div class="detail-meta" style="grid-template-columns: repeat(auto-fit, minmax(160px,1fr));">
+        <div class="metric">
+          <span class="label">Committed</span>
+          <span class="value" id="detailCommitted">0</span>
+        </div>
+        <div class="metric">
+          <span class="label">Aborted</span>
+          <span class="value" id="detailAborted">0</span>
+        </div>
+        <div class="metric">
+          <span class="label">Failed</span>
+          <span class="value" id="detailFailed">0</span>
+        </div>
+      </div>
+      <div class="row" style="justify-content: space-between; margin-top:10px;">
+        <div class="row" style="gap:8px;">
+          <label class="muted" for="statusFilter">Status filter</label>
+          <select id="statusFilter" class="small-btn" style="padding-right:28px;">
+            <option value="">All</option>
+            <option value="COMMITTED">Committed</option>
+            <option value="ABORTED">Aborted</option>
+            <option value="PREPARED">Prepared</option>
+          </select>
+        </div>
+        <div class="muted" id="detailSummary"></div>
+      </div>
+      <table class="table" id="txTable">
+        <thead>
+          <tr>
+            <th>Tx ID</th>
+            <th>Status</th>
+            <th>Created</th>
+            <th>Updated</th>
+            <th>Payload</th>
+          </tr>
+        </thead>
+        <tbody id="txTbody">
+          <tr><td colspan="5" class="muted">No transactions</td></tr>
+        </tbody>
+      </table>
+      <div class="pagination">
+        <button class="small-btn" id="prevPage">Prev</button>
+        <span class="muted" id="pageInfo"></span>
+        <button class="small-btn" id="nextPage">Next</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const nodesGrid = document.getElementById('nodesGrid');
+    const snapshotEl = document.getElementById('snapshot');
+    const masterAddrEl = document.getElementById('masterAddr');
+    const masterStatusEl = document.getElementById('masterStatus');
+    const masterDot = document.getElementById('masterDot');
+    const nodeCountEl = document.getElementById('nodeCount');
+    const toast = document.getElementById('toast');
+    const detailOverlay = document.getElementById('detailOverlay');
+    const detailName = document.getElementById('detailName');
+    const detailAddr = document.getElementById('detailAddr');
+    const detailRole = document.getElementById('detailRole');
+    const detailHealth = document.getElementById('detailHealth');
+    const detailSuccess = document.getElementById('detailSuccess');
+    const detailLoad = document.getElementById('detailLoad');
+    const detailCommitted = document.getElementById('detailCommitted');
+    const detailAborted = document.getElementById('detailAborted');
+    const detailFailed = document.getElementById('detailFailed');
+    const statusFilter = document.getElementById('statusFilter');
+    const txTbody = document.getElementById('txTbody');
+    const pageInfo = document.getElementById('pageInfo');
+    const detailSummary = document.getElementById('detailSummary');
+    const detailClose = document.getElementById('detailClose');
+    const prevPageBtn = document.getElementById('prevPage');
+    const nextPageBtn = document.getElementById('nextPage');
+
+    async function fetchCluster() {
+      try {
+        const res = await fetch('/cluster/summary', { cache: 'no-store' });
+        if (!res.ok) throw new Error('Failed to load cluster data');
+        const data = await res.json();
+        renderCluster(data);
+      } catch (err) {
+        showToast(err.message || 'Failed to load cluster data', true);
+      }
+    }
+
+    function renderCluster(data) {
+      const snapshot = data.generated_at ? new Date(data.generated_at).toLocaleTimeString() : 'just now';
+      snapshotEl.textContent = 'Snapshot ' + snapshot;
+
+      const masterAddr = data.master_addr || 'unknown';
+      masterAddrEl.textContent = masterAddr;
+      masterStatusEl.textContent = masterAddr === '' ? 'No master elected' : 'Online';
+      masterDot.classList.toggle('up', Boolean(masterAddr));
+      masterDot.classList.toggle('down', !masterAddr);
+
+      renderNodes(data.nodes || [], masterAddr);
+    }
+
+    function renderNodes(nodes, masterAddr) {
+      if (!Array.isArray(nodes)) return;
+      const sorted = [...nodes].sort((a, b) => {
+        if (a.address === masterAddr) return -1;
+        if (b.address === masterAddr) return 1;
+        if (a.alive === b.alive) return (a.address || '').localeCompare(b.address || '');
+        return a.alive ? -1 : 1;
+      });
+
+      nodeCountEl.textContent = sorted.length + ' node' + (sorted.length === 1 ? '' : 's');
+      nodesGrid.innerHTML = '';
+
+      sorted.forEach((node) => {
+        const metrics = node.metrics || {};
+        const name = node.name || node.address || 'unknown';
+        const card = document.createElement('div');
+        card.className = 'node-card';
+        const canRemove = node.role !== 'MASTER';
+        card.innerHTML = `
+          <div class="node-title">
+            <span>${escapeHtml(name)}</span>
+            <span class="pill ${node.role === 'MASTER' ? 'master' : 'slave'}">${node.role || ''}</span>
+          </div>
+          <div class="muted" style="margin-top:-2px;">${escapeHtml(node.address || '')}</div>
+          <div class="row">
+            <span class="status-dot ${node.alive ? 'up' : 'down'}"></span>
+            <span class="muted">${node.alive ? 'Healthy' : 'Unreachable'}</span>
+          </div>
+          <div class="actions">
+            <button class="chip-btn" data-action="rename" data-addr="${escapeAttr(node.address)}">Rename</button>
+            ${canRemove ? `<button class="chip-btn danger" data-action="remove" data-addr="${escapeAttr(node.address)}">Remove</button>` : ''}
+          </div>
+          <div class="metrics">
+            <div class="metric">
+              <span class="label">Load (in flight)</span>
+              <span class="value">${metrics.in_flight ?? 0}</span>
+            </div>
+            <div class="metric">
+              <span class="label">Success rate</span>
+              <span class="value">${formatRate(metrics.success_rate)}%</span>
+            </div>
+            <div class="metric">
+              <span class="label">Committed</span>
+              <span class="value">${metrics.committed ?? 0}</span>
+            </div>
+            <div class="metric">
+              <span class="label">Aborted</span>
+              <span class="value">${metrics.aborted ?? 0}</span>
+            </div>
+          </div>
+        `;
+
+        card.querySelectorAll('[data-action="rename"]').forEach((btn) => {
+          btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            promptRename(btn.dataset.addr);
+          });
+        });
+        card.querySelectorAll('[data-action="remove"]').forEach((btn) => {
+          btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            confirmRemove(btn.dataset.addr);
+          });
+        });
+        card.addEventListener('click', () => openDetail(node));
+
+        nodesGrid.appendChild(card);
+      });
+    }
+
+    function formatRate(value) {
+      const num = Number(value);
+      if (!isFinite(num)) return '0.0';
+      return num.toFixed(1);
+    }
+
+    function escapeHtml(str) {
+      return String(str || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+
+    function escapeAttr(str) {
+      return String(str || '').replace(/"/g, '&quot;');
+    }
+
+    function showToast(message, isError = false) {
+      toast.textContent = message;
+      toast.classList.toggle('error', isError);
+      toast.classList.add('show');
+      clearTimeout(showToast._timer);
+      showToast._timer = setTimeout(() => toast.classList.remove('show'), 3000);
+    }
+
+    async function addNode(e) {
+      e.preventDefault();
+      const name = document.getElementById('addName').value.trim();
+      const addr = document.getElementById('addAddr').value.trim();
+      const db = document.getElementById('addDb').value.trim();
+      if (!addr) return;
+
+      try {
+        const res = await fetch('/cluster/add', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ address: addr, name, database: db })
+        });
+        const payload = await res.json();
+        if (!res.ok || !payload.success) throw new Error(payload.error || 'Add node failed');
+        showToast('Node added: ' + addr);
+        document.getElementById('addName').value = '';
+        document.getElementById('addAddr').value = '';
+        document.getElementById('addDb').value = '';
+        fetchCluster();
+      } catch (err) {
+        showToast(err.message || 'Unable to add node', true);
+      }
+    }
+
+    async function confirmRemove(addr) {
+      if (!addr) return;
+      const ok = window.confirm(`Remove node ${addr}?`);
+      if (!ok) return;
+      try {
+        const res = await fetch('/cluster/remove', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ address: addr })
+        });
+        const payload = await res.json();
+        if (!res.ok || !payload.success) throw new Error(payload.error || 'Remove node failed');
+        showToast('Node removed: ' + addr);
+        fetchCluster();
+      } catch (err) {
+        showToast(err.message || 'Unable to remove node', true);
+      }
+    }
+
+    async function promptRename(addr) {
+      if (!addr) return;
+      const name = window.prompt('Enter a display name for this node', '');
+      if (name === null) return;
+      try {
+        const res = await fetch('/cluster/name', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ address: addr, name })
+        });
+        const payload = await res.json();
+        if (!res.ok || !payload.success) throw new Error(payload.error || 'Rename failed');
+        showToast('Name updated');
+        fetchCluster();
+      } catch (err) {
+        showToast(err.message || 'Unable to rename node', true);
+      }
+    }
+
+    document.getElementById('addForm').addEventListener('submit', addNode);
+    document.getElementById('refreshBtn').addEventListener('click', fetchCluster);
+    document.getElementById('masterRenameBtn').addEventListener('click', () => {
+      const addr = masterAddrEl.textContent.trim();
+      if (addr) {
+        promptRename(addr);
+      }
+    });
+
+    const detailState = { node: null, page: 1, limit: 10, status: '' };
+
+    function openDetail(node) {
+      detailState.node = node;
+      detailState.page = 1;
+      detailState.status = '';
+      statusFilter.value = '';
+
+      detailName.textContent = node.name || node.address || 'Node';
+      detailAddr.textContent = node.address || '';
+      detailRole.textContent = node.role || 'Node';
+      detailHealth.textContent = node.alive ? 'Healthy' : 'Unreachable';
+      const metrics = node.metrics || {};
+      detailSuccess.textContent = `${formatRate(metrics.success_rate)}%`;
+      detailLoad.textContent = metrics.in_flight ?? 0;
+      detailCommitted.textContent = metrics.committed ?? 0;
+      detailAborted.textContent = metrics.aborted ?? 0;
+      detailFailed.textContent = metrics.failed ?? 0;
+
+      detailOverlay.classList.remove('hidden');
+      loadTransactions();
+    }
+
+    function closeDetail() {
+      detailOverlay.classList.add('hidden');
+      detailState.node = null;
+    }
+
+    async function loadTransactions() {
+      const node = detailState.node;
+      if (!node) return;
+      const status = detailState.status;
+      const page = detailState.page;
+      const limit = detailState.limit;
+
+      try {
+        const url = `/transactions?address=${encodeURIComponent(node.address)}&page=${page}&limit=${limit}` + (status ? `&status=${status}` : '');
+        const res = await fetch(url, { cache: 'no-store' });
+        if (!res.ok) throw new Error('Failed to load transactions');
+        const data = await res.json();
+        renderTransactions(data);
+      } catch (err) {
+        showToast(err.message || 'Unable to load transactions', true);
+      }
+    }
+
+    function renderTransactions(data) {
+      const txs = Array.isArray(data.transactions) ? data.transactions : [];
+      txTbody.innerHTML = '';
+      if (data && data.has_db === false) {
+        txTbody.innerHTML = `<tr><td colspan="5" class="muted">No database configured on this node; transactions unavailable.</td></tr>`;
+      } else if (txs.length === 0) {
+        txTbody.innerHTML = `<tr><td colspan="5" class="muted">No transactions found</td></tr>`;
+      } else {
+        txs.forEach((tx) => {
+          const row = document.createElement('tr');
+          row.innerHTML = `
+            <td class="mono">${escapeHtml(tx.tx_id || '')}</td>
+            <td>${escapeHtml(tx.status || '')}</td>
+            <td>${tx.created_at ? new Date(tx.created_at).toLocaleString() : ''}</td>
+            <td>${tx.updated_at ? new Date(tx.updated_at).toLocaleString() : ''}</td>
+            <td class="muted">${escapeHtml(shortPayload(tx.payload))}</td>
+          `;
+          txTbody.appendChild(row);
+        });
+      }
+
+      const total = data.total || 0;
+      const page = data.page || detailState.page;
+      const limit = data.limit || detailState.limit;
+      const pages = Math.max(1, Math.ceil(total / limit));
+      pageInfo.textContent = `Page ${page} of ${pages}`;
+      detailSummary.textContent = `${total} txn(s)`;
+      prevPageBtn.disabled = page <= 1;
+      nextPageBtn.disabled = page >= pages;
+      detailState.page = page;
+    }
+
+    function shortPayload(payload) {
+      if (!payload) return '';
+      const str = typeof payload === 'string' ? payload : JSON.stringify(payload);
+      return str.length > 80 ? str.slice(0, 80) + '…' : str;
+    }
+
+    statusFilter.addEventListener('change', () => {
+      detailState.status = statusFilter.value;
+      detailState.page = 1;
+      loadTransactions();
+    });
+    prevPageBtn.addEventListener('click', () => {
+      if (detailState.page > 1) {
+        detailState.page -= 1;
+        loadTransactions();
+      }
+    });
+    nextPageBtn.addEventListener('click', () => {
+      detailState.page += 1;
+      loadTransactions();
+    });
+    detailClose.addEventListener('click', closeDetail);
+    detailOverlay.addEventListener('click', (e) => {
+      if (e.target === detailOverlay) closeDetail();
+    });
+
+    fetchCluster();
+    setInterval(fetchCluster, 5000);
+  </script>
+</body>
+</html>

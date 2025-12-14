@@ -34,37 +34,25 @@ func (c *Cluster) CheckAndElect() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	lowestAlive := c.lowestAliveAddrLocked()
-	currentMaster := ""
-
-	if c.master != nil {
-		currentMaster = c.master.Addr
-		if !c.master.GetAlive() {
-			log.Printf("[Election] Master %s is dead, triggering election", c.master.Addr)
-
-			c.master.SetRole(protocol.RoleSlave)
-			c.master = nil
-			currentMaster = ""
-		}
-	}
-
-	// If there is no alive node, nothing to elect
-	if lowestAlive == "" {
-		if c.master != nil {
-			c.master.SetRole(protocol.RoleSlave)
-			c.master = nil
-		}
-
+	// If current master exists and is alive, keep it to avoid churn when new nodes join.
+	if c.master != nil && c.master.GetAlive() {
 		return false
 	}
 
-	// If no master or current master isn't the lowest alive, elect deterministically
-	if c.master == nil || currentMaster != lowestAlive {
-		changed := c.electMasterLocked()
-		return changed
+	// If master exists but is dead, evict and elect.
+	if c.master != nil && !c.master.GetAlive() {
+		log.Printf("[Election] Master %s is dead, triggering election", c.master.Addr)
+		c.master.SetRole(protocol.RoleSlave)
+		c.master = nil
 	}
 
-	return false
+	lowestAlive := c.lowestAliveAddrLocked()
+	if lowestAlive == "" {
+		return false
+	}
+
+	changed := c.electMasterLocked()
+	return changed
 }
 
 // ShouldBeMaster checks if a given address should be the master based on election rules

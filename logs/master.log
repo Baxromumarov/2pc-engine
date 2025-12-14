@@ -1,0 +1,59 @@
+2025/12/14 17:58:49 Starting master on localhost:8080 with nodes: [localhost:8080 localhost:8081 localhost:8082]
+2025/12/14 17:58:49 [Master] Persistence disabled: state key missing (set --state-key or CLUSTER_STATE_KEY)
+2025/12/14 17:58:49 [Heartbeat] Started with interval 5s
+2025/12/14 17:58:49 [Election] Elected new master: localhost:8080
+2025/12/14 17:58:49 Master candidate listening on localhost:8080
+2025/12/14 17:58:49 [HTTPServer] Starting server on localhost:8080
+2025/12/14 17:59:11 [Node localhost:8080] Adding new node: localhost:3030 (db: postgres://postgres:postgres@localhost:5432/slave3?sslmode=disable)
+2025/12/14 17:59:11 [Master] Added node localhost:3030 to cluster
+2025/12/14 17:59:11 [Master] Auto-starting node localhost:3030 with DSN postgres://postgres:%2A%2A%2A%2A@localhost:5432/slave3?sslmode=disable
+2025/12/14 17:59:12 Starting node on localhost:3030
+2025/12/14 17:59:12 [Node] Persistence disabled: state key missing (set --state-key or CLUSTER_STATE_KEY)
+2025/12/14 17:59:12 [Heartbeat] Started with interval 5s
+2025/12/14 17:59:12 [Election] Elected new master: localhost:3030
+2025/12/14 17:59:12 Node ready on localhost:3030 (peers: localhost:3030,localhost:8080,localhost:8081,localhost:8082)
+2025/12/14 17:59:12 [HTTPServer] Starting server on localhost:3030
+2025/12/14 17:59:57 [Master localhost:8080] Received transaction request
+2025/12/14 17:59:57 [Coordinator] Starting 2PC for transaction 6fc31ea5-386c-4e23-9e68-1c98c91d40bd
+2025/12/14 17:59:57 [Coordinator] Found 4 participants for transaction 6fc31ea5-386c-4e23-9e68-1c98c91d40bd (including local: true)
+2025/12/14 17:59:57 [Coordinator] Local node prepare failed for transaction 6fc31ea5-386c-4e23-9e68-1c98c91d40bd: table is required
+2025/12/14 17:59:57 [Node localhost:3030] Received prepare request for transaction 6fc31ea5-386c-4e23-9e68-1c98c91d40bd
+2025/12/14 17:59:57 [Coordinator] Prepare failed for localhost:3030: transient status: 500
+2025/12/14 17:59:57 [Coordinator] Prepare failed for localhost:8081: transient status: 500
+2025/12/14 17:59:57 [Coordinator] Prepare failed for localhost:8082: transient status: 500
+2025/12/14 17:59:57 [Coordinator] Prepare failed for nodes [localhost:8080 (local) localhost:3030 localhost:8081 localhost:8082], aborting transaction 6fc31ea5-386c-4e23-9e68-1c98c91d40bd
+2025/12/14 17:59:57 [Node localhost:3030] Received abort request for transaction 6fc31ea5-386c-4e23-9e68-1c98c91d40bd
+2025/12/14 17:59:57 [Node localhost:3030] Aborted transaction 6fc31ea5-386c-4e23-9e68-1c98c91d40bd
+2025/12/14 17:59:57 [Master localhost:8080] Received transaction request
+2025/12/14 17:59:57 [Coordinator] Starting 2PC for transaction 01decdb6-4fda-487f-abb3-e64febeed965
+2025/12/14 17:59:57 [Coordinator] Found 4 participants for transaction 01decdb6-4fda-487f-abb3-e64febeed965 (including local: true)
+2025/12/14 17:59:57 [Coordinator] Local node prepare failed for transaction 01decdb6-4fda-487f-abb3-e64febeed965: unsupported operation: DELETE
+2025/12/14 17:59:57 [Node localhost:3030] Received prepare request for transaction 01decdb6-4fda-487f-abb3-e64febeed965
+2025/12/14 17:59:57 [Coordinator] Prepare failed for localhost:8081: transient status: 500
+2025/12/14 17:59:57 [Coordinator] Prepare failed for localhost:8082: transient status: 500
+2025/12/14 17:59:57 [Coordinator] Prepare failed for localhost:3030: transient status: 500
+2025/12/14 17:59:57 [Coordinator] Prepare failed for nodes [localhost:8080 (local) localhost:8081 localhost:8082 localhost:3030], aborting transaction 01decdb6-4fda-487f-abb3-e64febeed965
+2025/12/14 17:59:57 [Node localhost:3030] Received abort request for transaction 01decdb6-4fda-487f-abb3-e64febeed965
+2025/12/14 17:59:57 [Node localhost:3030] Aborted transaction 01decdb6-4fda-487f-abb3-e64febeed965
+2025/12/14 17:59:57 [Master localhost:8080] Received transaction request
+2025/12/14 17:59:57 [Coordinator] Starting 2PC for transaction 66ac42d9-602d-48e5-9e8c-86074fa38185
+2025/12/14 17:59:57 [Coordinator] Found 4 participants for transaction 66ac42d9-602d-48e5-9e8c-86074fa38185 (including local: true)
+2025/12/14 17:59:57 [Coordinator] Local node prepare failed for transaction 66ac42d9-602d-48e5-9e8c-86074fa38185: values are required
+2025/12/14 17:59:57 [Node localhost:3030] Received prepare request for transaction 66ac42d9-602d-48e5-9e8c-86074fa38185
+2025/12/14 17:59:57 [Coordinator] Prepare failed for localhost:3030: transient status: 500
+2025/12/14 17:59:57 [Coordinator] Prepare failed for localhost:8081: transient status: 500
+2025/12/14 17:59:57 [Coordinator] Prepare failed for localhost:8082: transient status: 500
+2025/12/14 17:59:57 [Coordinator] Prepare failed for nodes [localhost:8080 (local) localhost:3030 localhost:8081 localhost:8082], aborting transaction 66ac42d9-602d-48e5-9e8c-86074fa38185
+2025/12/14 17:59:57 [Node localhost:3030] Received abort request for transaction 66ac42d9-602d-48e5-9e8c-86074fa38185
+2025/12/14 17:59:57 [Node localhost:3030] Aborted transaction 66ac42d9-602d-48e5-9e8c-86074fa38185
+2025/12/14 17:59:57 [Master localhost:8080] Received transaction request
+2025/12/14 17:59:57 [Coordinator] Starting 2PC for transaction dbbc9c7f-a370-4580-b2b5-7e8ed4bafb40
+2025/12/14 17:59:57 [Coordinator] Found 4 participants for transaction dbbc9c7f-a370-4580-b2b5-7e8ed4bafb40 (including local: true)
+2025/12/14 17:59:57 [Coordinator] Local node prepare failed for transaction dbbc9c7f-a370-4580-b2b5-7e8ed4bafb40: where is required for UPDATE
+2025/12/14 17:59:57 [Node localhost:3030] Received prepare request for transaction dbbc9c7f-a370-4580-b2b5-7e8ed4bafb40
+2025/12/14 17:59:57 [Coordinator] Prepare failed for localhost:8081: transient status: 500
+2025/12/14 17:59:57 [Coordinator] Prepare failed for localhost:8082: transient status: 500
+2025/12/14 17:59:57 [Coordinator] Prepare failed for localhost:3030: transient status: 500
+2025/12/14 17:59:57 [Coordinator] Prepare failed for nodes [localhost:8080 (local) localhost:8081 localhost:8082 localhost:3030], aborting transaction dbbc9c7f-a370-4580-b2b5-7e8ed4bafb40
+2025/12/14 17:59:57 [Node localhost:3030] Received abort request for transaction dbbc9c7f-a370-4580-b2b5-7e8ed4bafb40
+2025/12/14 17:59:57 [Node localhost:3030] Aborted transaction dbbc9c7f-a370-4580-b2b5-7e8ed4bafb40
