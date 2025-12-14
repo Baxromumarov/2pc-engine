@@ -6,12 +6,15 @@ A networked distributed transaction system in Go that uses HTTP-based communicat
 
 - **Two-Phase Commit (2PC)**: Distributed transaction coordination with atomic commits
 - **Master Participation**: Master node also participates in transactions (not just coordination)
-- **Master Election**: Deterministic election based on lexicographical address ordering
+- **Stable Master Election**: Deterministic election; keeps the current master unless it dies
 - **Health Monitoring**: Heartbeat-based node health checks
-- **Dynamic Node Management**: Add/remove nodes at runtime via API
+- **Dynamic Node Management**: Add/remove/rename nodes at runtime via API/UI/CLI
+- **Dashboard UI**: `/dashboard` shows health, per-node metrics, rename/remove, and per-node transaction history (with pagination/filter)
 - **HTTP Communication**: RESTful API for node communication
 - **CLI Tool**: Command-line interface for cluster management
 - **Resilience**: Optional HTTP retries/backoff for transport and heartbeats; clearer commit/abort error reporting
+- **Encrypted State Persistence**: Optional encrypted state file for names/membership
+- **Auto-start Nodes (opt-in)**: Master can auto-launch new nodes locally when added (with a DSN)
 
 ## Project Structure
 
@@ -45,6 +48,9 @@ go run ./cmd/cli start-node --addr=localhost:8081 --nodes=localhost:8080,localho
 # terminal 3 (peer)
 POSTGRES_DSN="postgres://user:pass@localhost:5432/2pc?sslmode=disable" \
 go run ./cmd/cli start-node --addr=localhost:8082 --nodes=localhost:8080,localhost:8081,localhost:8082
+
+# open the dashboard
+open http://localhost:8080/dashboard
 ```
 
 Then issue a transaction:
@@ -69,6 +75,20 @@ go run ./cmd/cli health --addr=localhost:8081
 ```bash
 go run ./cmd/cli status --nodes=localhost:8080,localhost:8081,localhost:8082
 ```
+
+### Add/Remove Nodes and Dashboard (CLI)
+```bash
+# add node with display name + DB label
+go run ./cmd/cli add-node --master=localhost:8080 --addr=localhost:3030 --name="Shard-3" --database="postgres://user:pass@localhost:5432/shard3?sslmode=disable"
+
+# remove a node
+go run ./cmd/cli remove-node --master=localhost:8080 --addr=localhost:3030
+
+# textual dashboard snapshot
+go run ./cmd/cli dashboard --master=localhost:8080
+```
+
+CLI flags also support `--name`, `--state-file`, `--state-key` on start-master/start-node for display names and encrypted state persistence. Master additionally supports `--auto-start-nodes` (default true) to locally `go run` newly added nodes if a DB is provided.
 
 ### Execute a Transaction
 ```bash
@@ -169,8 +189,34 @@ Body: {"address": "new-node:8080"}
 #### Add Node to Cluster
 ```
 POST /cluster/add
-Body: {"address": "new-node:8080"}
+Body: {"address": "new-node:8080", "name": "Shard-3", "database": "postgres://..."}
 → 200 {"success": true}
+```
+
+#### Remove Node
+```
+POST /cluster/remove
+Body: {"address": "node:8082"}
+→ 200 {"success": true}
+```
+
+#### Rename Node
+```
+POST /cluster/name
+Body: {"address": "node:8082", "name": "Shard-2"}
+→ 200 {"success": true}
+```
+
+#### Cluster Summary (dashboard feed)
+```
+GET /cluster/summary
+→ 200 {"master_addr":"...","nodes":[...metrics...]}
+```
+
+#### Transactions (per-node)
+```
+GET /transactions?address=node:8081&page=1&limit=20[&status=COMMITTED]
+→ 200 {"transactions":[...],"total":123,"page":1,"limit":20,"address":"node:8081","has_db":true}
 ```
 
 ## Dynamic Node Management
@@ -200,6 +246,12 @@ curl -X POST http://master:8080/cluster/join \
 ```bash
 curl http://master:8080/cluster/nodes
 ```
+
+### Optional: Encrypted State Persistence
+- Add `--state-file=cluster_state.enc` and `--state-key=<secret>` (or env `CLUSTER_STATE_KEY`) to persist node names/membership across restarts. Auto-started nodes use a per-address state file.
+
+### Optional: Auto-start Nodes (local dev)
+- Run master with `--auto-start-nodes=true` (default) and provide a DB/DSN when adding; the master will `go run ./cmd/node` locally for the new address. For production, disable and use your orchestrator instead.
 
 ### Architecture with Multiple Shards
 
